@@ -1,19 +1,19 @@
 //! "plain" (i.e. cargo-style) output.
 
-use itertools::Itertools;
+use itertools::Itertools as _;
 use std::collections::{HashMap, hash_map::Entry};
 
 use annotate_snippets::{Annotation, AnnotationKind, Group, Level, Renderer, Snippet};
 use anstream::{eprintln, print, println};
-use owo_colors::OwoColorize;
+use owo_colors::OwoColorize as _;
 
 use crate::{
-    RenderLinks, ShowAuditUrls,
+    cli::{RenderLinks, ShowAuditUrls},
     finding::{
         Finding, FixDisposition, Severity,
         location::{Location, LocationKind},
     },
-    models::AsDocument,
+    models::AsDocument as _,
     registry::{
         FindingRegistry,
         input::{InputKey, InputRegistry},
@@ -23,8 +23,8 @@ use crate::{
 impl From<LocationKind> for AnnotationKind {
     fn from(kind: LocationKind) -> Self {
         match kind {
-            LocationKind::Primary => AnnotationKind::Primary,
-            LocationKind::Related => AnnotationKind::Context,
+            LocationKind::Primary => Self::Primary,
+            LocationKind::Related => Self::Context,
             // Unreachable because we filter out hidden locations earlier.
             LocationKind::Hidden => unreachable!(),
         }
@@ -69,7 +69,6 @@ pub(crate) fn finding_snippets<'doc>(
     let mut snippets = vec![];
     for (input_key, locations) in locations_by_workflow {
         let input = registry.get_input(input_key);
-
         let path = match render_links_mode {
             RenderLinks::Always => input.link().unwrap_or(input_key.presentation_path()),
             RenderLinks::Never => input_key.presentation_path(),
@@ -223,10 +222,7 @@ fn render_finding(
         title = title.id_url(finding.url);
     }
 
-    let confidence = format!(
-        "audit confidence → {:?}",
-        &finding.determinations.confidence
-    );
+    let confidence = format!("audit confidence → {:?}", finding.determinations.confidence);
 
     let mut group = Group::with_title(title)
         .elements(finding_snippets(registry, finding, render_links_mode))

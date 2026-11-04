@@ -3,10 +3,10 @@ use subfeature::Subfeature;
 
 use crate::{
     audit::{Audit, AuditError, AuditLoadError, audit_meta},
-    config::Config,
     finding::{Confidence, Finding, Persona, Severity},
     models::{
-        StepBodyCommon, StepCommon, action::CompositeStep, uses::RepositoryUsesExt, workflow::Step,
+        StepBodyCommon, StepCommon, action::CompositeStep, uses::RepositoryUsesExt as _,
+        workflow::Step,
     },
     state::AuditState,
     utils,
@@ -27,7 +27,11 @@ impl Misfeature {
     ) -> Result<Vec<Finding<'doc>>, AuditError> {
         let mut findings = vec![];
 
-        match step.body() {
+        let Some(step_body) = step.body() else {
+            return Ok(findings);
+        };
+
+        match step_body {
             StepBodyCommon::Uses {
                 uses: Uses::Repository(uses),
                 with: LoE::Literal(with),
@@ -123,7 +127,7 @@ impl Audit for Misfeature {
     async fn audit_step<'doc>(
         &self,
         step: &Step<'doc>,
-        _config: &Config,
+        _group: &crate::registry::input::InputGroup,
     ) -> Result<Vec<Finding<'doc>>, AuditError> {
         self.process_step(step)
     }
@@ -131,7 +135,7 @@ impl Audit for Misfeature {
     async fn audit_composite_step<'a>(
         &self,
         step: &CompositeStep<'a>,
-        _config: &Config,
+        _group: &crate::registry::input::InputGroup,
     ) -> Result<Vec<Finding<'a>>, AuditError> {
         self.process_step(step)
     }

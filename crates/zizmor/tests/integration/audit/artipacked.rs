@@ -1,9 +1,9 @@
-use crate::common::{input_under_test, zizmor};
+use zizmor_dev::{WorkspaceBuilder, Zizmor, input_under_test};
 
 #[test]
 fn test_regular_persona() -> anyhow::Result<()> {
     insta::assert_snapshot!(
-        zizmor().input(input_under_test("artipacked.yml")).run()?,
+        Zizmor::cargo_bin().input(input_under_test("artipacked.yml")).run()?,
         @"
     warning[artipacked]: credential persistence through GitHub Actions artifacts
       --> @@INPUT@@:22:9
@@ -24,7 +24,7 @@ fn test_regular_persona() -> anyhow::Result<()> {
 #[test]
 fn test_pedantic_persona() -> anyhow::Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("artipacked.yml"))
             .args(["--persona=pedantic"])
             .run()?,
@@ -48,7 +48,7 @@ fn test_pedantic_persona() -> anyhow::Result<()> {
 #[test]
 fn test_auditor_persona() -> anyhow::Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("artipacked.yml"))
             .args(["--persona=auditor"])
             .run()?,
@@ -88,7 +88,7 @@ fn test_auditor_persona() -> anyhow::Result<()> {
 #[test]
 fn test_issue_447() -> anyhow::Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("artipacked/issue-447-repro.yml"))
             .args(["--persona=auditor"])
             .run()?,
@@ -121,7 +121,7 @@ fn test_issue_447() -> anyhow::Result<()> {
 #[test]
 fn test_issue_1709() -> anyhow::Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("artipacked/issue-1709-repro.yml"))
             .args(["--persona=pedantic"])
             .run()?,
@@ -145,37 +145,11 @@ fn test_issue_1709() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Fix #1769: dynamic `with:` clause emits a blanket pedantic finding that
-/// the clause cannot be analyzed.
-///
-/// See <https://github.com/zizmorcore/zizmor/issues/1769>
-#[test]
-fn test_issue_1769() -> anyhow::Result<()> {
-    insta::assert_snapshot!(
-        zizmor().input(input_under_test("artipacked/issue-1769-repro.yml")).args(["--persona=pedantic"]).run()?,
-        @"
-    info[artipacked]: credential persistence through GitHub Actions artifacts
-      --> @@INPUT@@:19:9
-       |
-    18 |       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # zizmor: ignore[obfuscation]
-       |               --------------------------------------------------------- this checkout
-    19 |         with: ${{ fromJson(steps.setup.outputs.options) }}
-       |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ may not set persist-credentials: false
-       |
-       = note: audit confidence → High
-
-    2 findings (1 ignored): 1 informational, 0 low, 0 medium, 0 high
-    "
-    );
-
-    Ok(())
-}
-
 /// Ensures that the artipacked audit works correctly on composite actions.
 #[test]
 fn test_composite_action() -> anyhow::Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("artipacked/demo-action/action.yml"))
             .args(["--persona=auditor"])
             .run()?,
@@ -205,6 +179,98 @@ fn test_composite_action() -> anyhow::Result<()> {
        = note: this finding has an auto-fix
 
     2 findings (2 unsafe fixes): 0 informational, 0 low, 2 medium, 0 high
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_fix_merges_into_existing_with_block() -> anyhow::Result<()> {
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(
+        ".github/workflows/artipacked.yml",
+        r#"
+name: Test Workflow
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+            token: ${{ secrets.GITHUB_TOKEN }}
+            fetch-depth: 2
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+            name: my-artifact
+            path: .
+"#,
+    );
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/artipacked.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .args(["--fix=all"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -10,6 +10,7 @@
+             with:
+                 token: ${{ secrets.GITHUB_TOKEN }}
+                 fetch-depth: 2
+    +            persist-credentials: false
+           - name: Upload artifacts
+             uses: actions/upload-artifact@v4
+             with:
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_fix_creates_block_when_missing() -> anyhow::Result<()> {
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(
+        ".github/workflows/artipacked.yml",
+        r#"
+name: Test Workflow
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-artifact
+          path: .
+"#,
+    );
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/artipacked.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .args(["--fix=all"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -7,6 +7,8 @@
+         steps:
+           - name: Checkout
+             uses: actions/checkout@v4
+    +        with:
+    +          persist-credentials: false
+           - name: Upload artifacts
+             uses: actions/upload-artifact@v4
+             with:
     "
     );
 

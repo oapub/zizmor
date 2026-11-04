@@ -1,6 +1,5 @@
 //! GitHub Actions expression parsing and analysis.
 
-#![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
 use std::ops::Deref;
@@ -27,6 +26,9 @@ pub enum Error {
     /// The expression failed to parse according to the grammar.
     #[error(transparent)]
     Syntax(#[from] SyntaxError),
+    /// The expression exceeds the parser's maximum recursion depth.
+    #[error("expression exceeds maximum recursion depth")]
+    Depth,
     /// The expression contains an invalid function call.
     #[error("Invalid function call")]
     Call(#[from] call::Error),
@@ -142,16 +144,24 @@ impl<'a> SpannedExpr<'a> {
         let mut contexts = vec![];
 
         match self.deref() {
-            Expr::Call(Call { func, args }) => {
+            Expr::Call(Call { func, args }) => match func {
                 // These functions, when evaluated, produce an evaluation
                 // that includes some or all of the contexts listed in
                 // their arguments.
-                if matches!(func, Function::ToJSON | Function::Format | Function::Join) {
+                Function::ToJSON | Function::FromJSON | Function::Format | Function::Join => {
                     for arg in args {
                         contexts.extend(arg.dataflow_contexts());
                     }
                 }
-            }
+                // `case(pred1, val1, ..., default)` evaluates to one of its
+                // values or its default; the predicates are booleans.
+                Function::Case => {
+                    for arg in args.iter().skip(1).step_by(2).chain(args.last()) {
+                        contexts.extend(arg.dataflow_contexts());
+                    }
+                }
+                _ => (),
+            },
             // NOTE: We intentionally don't handle the `func(...).foo.bar`
             // case differently here, since a call followed by a
             // context access *can* flow into the evaluation.
@@ -191,7 +201,7 @@ impl<'a> SpannedExpr<'a> {
     /// For example, `${{ foo.bar == 'true' && 'hello' || '' }}` returns
     /// `['hello', '']` since those are the two possible evaluated values.
     /// `${{ foo.abc || foo.def }}` returns `[foo.abc, foo.def]`.
-    pub fn leaf_expressions(&self) -> Vec<&SpannedExpr<'a>> {
+    pub fn leaf_expressions(&self) -> Vec<&Self> {
         let mut leaves = vec![];
 
         match self.deref() {
@@ -216,7 +226,7 @@ impl<'a> SpannedExpr<'a> {
     ///
     /// A computed index is any index operation with a non-literal
     /// evaluation, e.g. `foo[a.b.c]`.
-    pub fn computed_indices(&self) -> Vec<&SpannedExpr<'a>> {
+    pub fn computed_indices(&self) -> Vec<&Self> {
         let mut index_exprs = vec![];
 
         match self.deref() {
@@ -248,16 +258,15 @@ impl<'a> SpannedExpr<'a> {
         index_exprs
     }
 
-    /// Like [`Expr::constant_reducible`], but for all subexpressions
-    /// rather than the top-level expression.
+    /// Returns all non-literal subexpressions within this expression
+    /// that can be constant-evaluated, along with their evaluations.
     ///
-    /// This has slightly different semantics than `constant_reducible`:
-    /// it doesn't include "trivially" reducible expressions like literals,
-    /// since flagging these as reducible within a larger expression
-    /// would be misleading.
-    pub fn constant_reducible_subexprs(&self) -> Vec<&SpannedExpr<'a>> {
-        if !self.is_literal() && self.constant_reducible() {
-            return vec![self];
+    /// Literals are skipped because they are already simplified.
+    pub fn consteval_subexprs(&self) -> Vec<(&Self, Evaluation)> {
+        if !self.is_literal()
+            && let Some(evaluation) = self.consteval()
+        {
+            return vec![(self, evaluation)];
         }
 
         let mut subexprs = vec![];
@@ -265,23 +274,22 @@ impl<'a> SpannedExpr<'a> {
         match self.deref() {
             Expr::Call(Call { func: _, args }) => {
                 for arg in args {
-                    subexprs.extend(arg.constant_reducible_subexprs());
+                    subexprs.extend(arg.consteval_subexprs());
                 }
             }
             Expr::Context(ctx) => {
-                // contexts themselves are never reducible, but they might
-                // contains reducible index subexpressions.
+                // Context indices may contain constant subexpressions.
                 for part in &ctx.parts {
-                    subexprs.extend(part.constant_reducible_subexprs());
+                    subexprs.extend(part.consteval_subexprs());
                 }
             }
             Expr::BinExpr(BinExpr { lhs, op: _, rhs }) => {
-                subexprs.extend(lhs.constant_reducible_subexprs());
-                subexprs.extend(rhs.constant_reducible_subexprs());
+                subexprs.extend(lhs.consteval_subexprs());
+                subexprs.extend(rhs.consteval_subexprs());
             }
-            Expr::UnExpr { op: _, expr } => subexprs.extend(expr.constant_reducible_subexprs()),
+            Expr::UnExpr { op: _, expr } => subexprs.extend(expr.consteval_subexprs()),
 
-            Expr::Index(expr) => subexprs.extend(expr.constant_reducible_subexprs()),
+            Expr::Index(expr) => subexprs.extend(expr.consteval_subexprs()),
             _ => {}
         }
 
@@ -351,58 +359,6 @@ impl<'src> Expr<'src> {
         matches!(self, Expr::Literal(_))
     }
 
-    /// Returns whether the expression is constant reducible.
-    ///
-    /// "Constant reducible" is similar to "constant foldable" but with
-    /// meta-evaluation semantics: the expression `5` would not be
-    /// constant foldable in a normal program (because it's already
-    /// an atom), but is "constant reducible" in a GitHub Actions expression
-    /// because an expression containing it (e.g. `${{ 5 }}`) can be elided
-    /// entirely and replaced with `5`.
-    ///
-    /// There are three kinds of reducible expressions:
-    ///
-    /// 1. Literals, which reduce to their literal value;
-    /// 2. Binops/unops with reducible subexpressions, which reduce
-    ///    to their evaluation;
-    /// 3. Select function calls where the semantics of the function
-    ///    mean that reducible arguments make the call itself reducible.
-    ///
-    /// NOTE: This implementation is sound but not complete.
-    pub fn constant_reducible(&self) -> bool {
-        match self {
-            // Literals are always reducible.
-            Expr::Literal(_) => true,
-            // Binops are reducible if their LHS and RHS are reducible.
-            Expr::BinExpr(BinExpr { lhs, op: _, rhs }) => {
-                lhs.constant_reducible() && rhs.constant_reducible()
-            }
-            // Unops are reducible if their interior expression is reducible.
-            Expr::UnExpr { op: _, expr } => expr.constant_reducible(),
-            Expr::Call(Call { func, args }) => {
-                // These functions are reducible if their arguments are reducible.
-                // TODO(ww): `fromJSON` *is* frequently reducible, but
-                // doing so soundly with subexpressions is annoying.
-                // We overapproximate for now and consider it non-reducible.
-                if matches!(
-                    func,
-                    Function::Contains
-                        | Function::StartsWith
-                        | Function::EndsWith
-                        | Function::Format
-                        | Function::ToJSON
-                        | Function::Join // | Function::FromJSON
-                ) {
-                    args.iter().all(|e| e.constant_reducible())
-                } else {
-                    false
-                }
-            }
-            // Everything else is presumed non-reducible.
-            _ => false,
-        }
-    }
-
     /// Parses the given string into an expression.
     pub fn parse(expr: &'src str) -> Result<SpannedExpr<'src>, Error> {
         parser::parse(expr)
@@ -415,7 +371,7 @@ impl<'src> Expr<'src> {
     /// For example, `a == b` is considered to match `b == a`, but `a > b` is not
     /// considered to match `b > a`. This check is recusive, i.e. two nested binary expressions
     /// will be fully checked for commutative equivalence.
-    pub fn commutative_matches(&self, other: &Expr<'src>) -> bool {
+    pub fn commutative_matches(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::BinExpr(sb), Self::BinExpr(ob)) => {
                 if sb.op != ob.op {
@@ -480,9 +436,9 @@ pub enum Evaluation {
     /// The null value.
     Null,
     /// An array value. Array evaluations can only be realized through `fromJSON`.
-    Array(Vec<Evaluation>),
+    Array(Vec<Self>),
     /// An object value. Object evaluations can only be realized through `fromJSON`.
-    Object(std::collections::HashMap<String, Evaluation>),
+    Object(std::collections::HashMap<String, Self>),
 }
 
 impl TryFrom<serde_json::Value> for Evaluation {
@@ -490,29 +446,29 @@ impl TryFrom<serde_json::Value> for Evaluation {
 
     fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
         match value {
-            serde_json::Value::Null => Ok(Evaluation::Null),
-            serde_json::Value::Bool(b) => Ok(Evaluation::Boolean(b)),
+            serde_json::Value::Null => Ok(Self::Null),
+            serde_json::Value::Bool(b) => Ok(Self::Boolean(b)),
             serde_json::Value::Number(n) => {
                 if let Some(f) = n.as_f64() {
-                    Ok(Evaluation::Number(f))
+                    Ok(Self::Number(f))
                 } else {
                     Err(())
                 }
             }
-            serde_json::Value::String(s) => Ok(Evaluation::String(s)),
+            serde_json::Value::String(s) => Ok(Self::String(s)),
             serde_json::Value::Array(arr) => {
                 let elements = arr
                     .into_iter()
                     .map(|elem| elem.try_into())
                     .collect::<Result<_, _>>()?;
-                Ok(Evaluation::Array(elements))
+                Ok(Self::Array(elements))
             }
             serde_json::Value::Object(obj) => {
                 let mut map = std::collections::HashMap::new();
                 for (key, value) in obj {
                     map.insert(key, value.try_into()?);
                 }
-                Ok(Evaluation::Object(map))
+                Ok(Self::Object(map))
             }
         }
     }
@@ -523,9 +479,9 @@ impl TryInto<serde_json::Value> for Evaluation {
 
     fn try_into(self) -> Result<serde_json::Value, Self::Error> {
         match self {
-            Evaluation::Null => Ok(serde_json::Value::Null),
-            Evaluation::Boolean(b) => Ok(serde_json::Value::Bool(b)),
-            Evaluation::Number(n) => {
+            Self::Null => Ok(serde_json::Value::Null),
+            Self::Boolean(b) => Ok(serde_json::Value::Bool(b)),
+            Self::Number(n) => {
                 // NOTE: serde_json has different internal representations
                 // for integers and floats, so we need to handle both cases
                 // to ensure we serialize integers without a decimal point.
@@ -539,15 +495,15 @@ impl TryInto<serde_json::Value> for Evaluation {
                     Err(())
                 }
             }
-            Evaluation::String(s) => Ok(serde_json::Value::String(s)),
-            Evaluation::Array(arr) => {
+            Self::String(s) => Ok(serde_json::Value::String(s)),
+            Self::Array(arr) => {
                 let elements = arr
                     .into_iter()
                     .map(|elem| elem.try_into())
                     .collect::<Result<_, _>>()?;
                 Ok(serde_json::Value::Array(elements))
             }
-            Evaluation::Object(obj) => {
+            Self::Object(obj) => {
                 let mut map = serde_json::Map::new();
                 for (key, value) in obj {
                     map.insert(key, value.try_into()?);
@@ -568,12 +524,12 @@ impl Evaluation {
     /// - Arrays and dictionaries are always truthy (non-empty objects)
     pub fn as_boolean(&self) -> bool {
         match self {
-            Evaluation::Boolean(b) => *b,
-            Evaluation::Null => false,
-            Evaluation::Number(n) => *n != 0.0 && !n.is_nan(),
-            Evaluation::String(s) => !s.is_empty(),
+            Self::Boolean(b) => *b,
+            Self::Null => false,
+            Self::Number(n) => *n != 0.0 && !n.is_nan(),
+            Self::String(s) => !s.is_empty(),
             // Arrays and objects are always truthy, even if empty.
-            Evaluation::Array(_) | Evaluation::Object(_) => true,
+            Self::Array(_) | Self::Object(_) => true,
         }
     }
 
@@ -582,17 +538,17 @@ impl Evaluation {
     /// See: <https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#operators>
     pub fn as_number(&self) -> f64 {
         match self {
-            Evaluation::String(s) => parse_number(s),
-            Evaluation::Number(n) => *n,
-            Evaluation::Boolean(b) => {
+            Self::String(s) => parse_number(s),
+            Self::Number(n) => *n,
+            Self::Boolean(b) => {
                 if *b {
                     1.0
                 } else {
                     0.0
                 }
             }
-            Evaluation::Null => 0.0,
-            Evaluation::Array(_) | Evaluation::Object(_) => f64::NAN,
+            Self::Null => 0.0,
+            Self::Array(_) | Self::Object(_) => f64::NAN,
         }
     }
 
@@ -743,11 +699,8 @@ impl std::fmt::Display for EvaluationSema<'_> {
 }
 
 impl<'src> Expr<'src> {
-    /// Evaluates a constant-reducible expression to its literal value.
-    ///
-    /// Returns `Some(Evaluation)` if the expression can be constant-evaluated,
-    /// or `None` if the expression contains non-constant elements (like contexts or
-    /// non-reducible function calls).
+    /// Attempts to const-evaluate an expression, returning the evaluation
+    /// if successful.
     ///
     /// This implementation follows GitHub Actions' evaluation semantics as documented at:
     /// https://docs.github.com/en/actions/reference/workflows-and-actions/expressions
@@ -2069,42 +2022,13 @@ mod tests {
     }
 
     #[test]
-    fn test_expr_constant_reducible() -> Result<(), Error> {
-        for (expr, reducible) in &[
-            ("'foo'", true),
-            ("1", true),
-            ("true", true),
-            ("null", true),
-            // boolean and unary expressions of all literals are
-            // always reducible.
-            ("!true", true),
-            ("!null", true),
-            ("true && false", true),
-            ("true || false", true),
-            ("null && !null && true", true),
-            // formats/contains/startsWith/endsWith are reducible
-            // if all of their arguments are reducible.
-            ("format('{0} {1}', 'foo', 'bar')", true),
-            ("format('{0} {1}', 1, 2)", true),
-            ("format('{0} {1}', 1, '2')", true),
-            ("contains('foo', 'bar')", true),
-            ("startsWith('foo', 'bar')", true),
-            ("endsWith('foo', 'bar')", true),
-            ("startsWith(some.context, 'bar')", false),
-            ("endsWith(some.context, 'bar')", false),
-            // Nesting works as long as the nested call is also reducible.
-            ("format('{0} {1}', '1', format('{0}', null))", true),
-            ("format('{0} {1}', '1', startsWith('foo', 'foo'))", true),
-            ("format('{0} {1}', '1', startsWith(foo.bar, 'foo'))", false),
-            ("foo", false),
-            ("foo.bar", false),
-            ("foo.bar[1]", false),
-            ("foo.bar == 'bar'", false),
-            ("foo.bar || bar || baz", false),
-            ("foo.bar && bar && baz", false),
+    fn test_expr_consteval_nonconstant() -> Result<(), Error> {
+        for source in [
+            "foo.bar",
+            "foo.bar == 'bar'",
+            "startsWith(some.context, 'bar')",
         ] {
-            let expr = Expr::parse(expr)?;
-            assert_eq!(expr.constant_reducible(), *reducible);
+            assert!(Expr::parse(source)?.consteval().is_none(), "{source}");
         }
 
         Ok(())
@@ -2434,22 +2358,54 @@ mod tests {
     }
 
     #[test]
-    fn test_expr_has_constant_reducible_subexpr() -> Result<(), Error> {
-        for (expr, reducible) in &[
-            // Literals are not considered reducible subexpressions.
-            ("'foo'", false),
-            ("1", false),
-            ("true", false),
-            ("null", false),
-            // Non-reducible expressions with reducible subexpressions
+    fn test_expr_consteval_subexprs() -> Result<(), Error> {
+        use crate::Evaluation;
+
+        for (source, expected) in [
+            // Literals cannot be simplified further.
+            ("'foo'", vec![]),
+            // Return only the outermost evaluable expression in each subtree.
             (
-                "format('{0}, {1}', github.event.number, format('{0}', 'abc'))",
-                true,
+                "format('{0}, {1}', github.event.number, format('{0}', fromJSON('\"abc\"')))",
+                vec![(
+                    "format('{0}', fromJSON('\"abc\"'))",
+                    Evaluation::String("abc".into()),
+                )],
             ),
-            ("foobar[format('{0}', 'event')]", true),
+            (
+                "foobar[format('{0}', 'event')]",
+                vec![("format('{0}', 'event')", Evaluation::String("event".into()))],
+            ),
+            (
+                "foo && fromJSON('false') || case(true, 1, 2)",
+                vec![
+                    ("fromJSON('false')", Evaluation::Boolean(false)),
+                    ("case(true, 1, 2)", Evaluation::Number(1.0)),
+                ],
+            ),
+            (
+                "contains(fromJSON('[1]'), foo)",
+                vec![(
+                    "fromJSON('[1]')",
+                    Evaluation::Array(vec![Evaluation::Number(1.0)]),
+                )],
+            ),
+            (
+                "format('{0}{1}', '$', '{{')",
+                vec![(
+                    "format('{0}{1}', '$', '{{')",
+                    Evaluation::String("${{".into()),
+                )],
+            ),
+            ("format('{1}', 'foo')", vec![]),
         ] {
-            let expr = Expr::parse(expr)?;
-            assert_eq!(!expr.constant_reducible_subexprs().is_empty(), *reducible);
+            let expr = Expr::parse(source)?;
+            let actual = expr
+                .consteval_subexprs()
+                .into_iter()
+                .map(|(expr, evaluation)| (expr.origin.raw, evaluation))
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "{source}");
         }
         Ok(())
     }
@@ -2561,6 +2517,32 @@ mod tests {
             ["foo.bar", "github", "github"]
         );
 
+        // fromJSON(toJSON(x)) round-trips to x, so x flows into the evaluation.
+        let expr = Expr::parse("fromJSON(toJSON(github.event.issue.title))")?;
+        assert_eq!(
+            expr.dataflow_contexts()
+                .iter()
+                .map(|t| t.1.raw)
+                .collect::<Vec<_>>(),
+            ["github.event.issue.title"]
+        );
+
+        // case(...): only the values and the default flow into the evaluation.
+        let expr = Expr::parse(
+            "case(foo.a == 'x', github.event.issue.title, foo.b, github.event.issue.body, foo.c)",
+        )?;
+        assert_eq!(
+            expr.dataflow_contexts()
+                .iter()
+                .map(|t| t.1.raw)
+                .collect::<Vec<_>>(),
+            [
+                "github.event.issue.title",
+                "github.event.issue.body",
+                "foo.c"
+            ]
+        );
+
         Ok(())
     }
 
@@ -2643,7 +2625,7 @@ mod tests {
         let leaves = expr.leaf_expressions();
         assert_eq!(leaves.len(), 2);
         assert!(matches!(&leaves[0].inner, Expr::Literal(Literal::String(s)) if s == "redis:7"));
-        assert!(matches!(&leaves[1].inner, Expr::Literal(Literal::String(s)) if s == ""));
+        assert!(matches!(&leaves[1].inner, Expr::Literal(Literal::String(s)) if s.is_empty()));
 
         // Comparison operators are leaves themselves (they produce booleans).
         let expr = Expr::parse("foo.bar == 'abc'")?;

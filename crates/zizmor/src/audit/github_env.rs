@@ -1,19 +1,18 @@
-use std::ops::{Deref, Range};
+use std::ops::{Deref as _, Range};
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use github_actions_models::action;
-use github_actions_models::workflow::job::StepBody;
+use github_actions_models::workflow::job;
 use tree_sitter::{
     Language, Parser, QueryCapture, QueryCursor, QueryMatches, StreamingIterator as _, Tree,
 };
 
 use super::{Audit, AuditLoadError, audit_meta};
 use crate::audit::AuditError;
-use crate::config::Config;
 use crate::finding::location::Locatable as _;
 use crate::finding::{Confidence, Finding, Severity};
-use crate::models::StepCommon;
-use crate::models::{workflow::JobCommon as _, workflow::Step};
+use crate::models::StepCommon as _;
+use crate::models::workflow::{Step, StepInner};
 use crate::state::AuditState;
 use crate::utils;
 use crate::utils::once::static_regex;
@@ -69,41 +68,49 @@ const BASH_PIPELINE_QUERY: &str = r#"
 
 const PWSH_REDIRECT_QUERY: &str = r#"
 (redirection
-  (file_redirection_operator)
-  (redirected_file_name
-    (_)*
-    (array_literal_expression
-      (unary_expression
-        [
-          (string_literal
-            (expandable_string_literal (variable) @destination))
-          (variable) @destination
-        ]
-      )
-    (_)*
+  operator: (file_redirection_operator)
+  destination: (command_argument
+    [
+      (expandable_string (variable) @destination)
+      (variable) @destination
+    ]
   )
   (#match? @destination "(?i)ENV:GITHUB_ENV|ENV:GITHUB_PATH")
-)) @span
+) @span
 "#;
 
 const PWSH_PIPELINE_QUERY: &str = r#"
 (pipeline
-  (pipeline_chain
-    (command
-        command_name: (command_name) @cmd
-        command_elements: (command_elements
-        (_)*
-        (array_literal_expression
-            (unary_expression [
-            (string_literal
-                (expandable_string_literal (variable) @destination))
+  elements: (command
+    name: (command_name) @cmd
+    [
+      (command_argument
+        [
+          (expandable_string (variable) @destination)
+          (variable) @destination
+          (array_literal_expression
+            (command_argument
+              [
+                (expandable_string (variable) @destination)
+                (variable) @destination
+              ]))
+        ])
+      (command_parameter
+        value: (command_argument
+          [
+            (expandable_string (variable) @destination)
             (variable) @destination
-            ])
-        )
-        (_)*))
-    (#match? @cmd "(?i)out-file|add-content|set-content|tee-object")
-    (#match? @destination "(?i)ENV:GITHUB_ENV|ENV:GITHUB_PATH")
+            (array_literal_expression
+              (command_argument
+                [
+                  (expandable_string (variable) @destination)
+                  (variable) @destination
+                ]))
+          ]))
+    ]
   )
+  (#match? @cmd "(?i)out-file|add-content|set-content|tee-object")
+  (#match? @destination "(?i)ENV:GITHUB_ENV|ENV:GITHUB_PATH")
 ) @span
 "#;
 
@@ -143,7 +150,7 @@ impl GitHubEnv {
         cursor: &'a mut QueryCursor,
         tree: &'a Tree,
         source: &'a str,
-    ) -> QueryMatches<'a, 'a, &'a [u8], &'a [u8]> {
+    ) -> QueryMatches<'a, 'a, 'static, &'a [u8], &'a [u8]> {
         cursor.matches(query, tree.root_node(), source.as_bytes())
     }
 
@@ -189,7 +196,7 @@ impl GitHubEnv {
         matches.for_each(|mat| {
             let cmd = {
                 let cap = mat
-                    .captures
+                    .captures()
                     .iter()
                     .find(|cap| cap.index == cmd)
                     .expect("internal error: expected capture for cmd");
@@ -198,20 +205,21 @@ impl GitHubEnv {
                     .expect("impossible: capture should be UTF-8 by construction")
             };
 
-            let args = mat.captures.iter().filter(|cap| cap.index == args);
+            let args = mat.captures().iter().filter(|cap| cap.index == args);
 
-            // Filter matches down to those where the command isn't `echo`
+            // Filter matches down to those where the command isn't `echo` or `printf`
             // *or* at least one argument isn't a string literal.
-            if cmd != "echo" || !self.bash_echo_args_are_safe(args) {
+            // TODO: other echo-like commands to check here?
+            if (cmd != "echo" && cmd != "printf") || !self.bash_echo_args_are_safe(args) {
                 let span = mat
-                    .captures
+                    .captures()
                     .iter()
                     .find(|cap| cap.index == self.bash_redirect_query.span_idx)
                     .expect("internal error: expected capture for span");
 
                 let destination = {
                     let cap = mat
-                        .captures
+                        .captures()
                         .iter()
                         .find(|cap| cap.index == destination)
                         .expect("internal error: expected capture for destination");
@@ -236,14 +244,14 @@ impl GitHubEnv {
 
             matches.for_each(|mat| {
                 let span = mat
-                    .captures
+                    .captures()
                     .iter()
                     .find(|cap| cap.index == query.span_idx)
                     .expect("internal error: expected capture for span");
 
                 let destination = {
                     let cap = mat
-                        .captures
+                        .captures()
                         .iter()
                         .find(|cap| cap.index == destination)
                         .expect("internal error: expected capture for destination");
@@ -298,14 +306,14 @@ impl GitHubEnv {
             let matches = self.query(query, &mut cursor, &tree, script_body);
             matches.for_each(|mat| {
                 let span = mat
-                    .captures
+                    .captures()
                     .iter()
                     .find(|cap| cap.index == query.span_idx)
                     .expect("internal error: no matching capture");
 
                 let destination = {
                     let cap = mat
-                        .captures
+                        .captures()
                         .iter()
                         .find(|cap| cap.index == destination)
                         .expect("internal error: no matching capture");
@@ -380,26 +388,25 @@ impl Audit for GitHubEnv {
     async fn audit_step<'doc>(
         &self,
         step: &Step<'doc>,
-        _config: &Config,
+        _group: &crate::registry::input::InputGroup,
     ) -> Result<Vec<Finding<'doc>>, AuditError> {
         let mut findings = vec![];
 
         let workflow = step.workflow();
 
         let has_dangerous_triggers =
-            workflow.has_workflow_run() || workflow.has_pull_request_target();
+            workflow.workflow_run().is_some() || workflow.pull_request_target().is_some();
 
         if !has_dangerous_triggers {
             return Ok(findings);
         }
 
-        if let StepBody::Run { run, .. } = &step.deref().body {
+        if let StepInner::Run(job::RunStep { run, .. }) = &step.deref() {
             let shell = step.shell().map(|s| s.0).unwrap_or_else(|| {
                 tracing::warn!(
-                    "github-env: couldn't determine shell type for {workflow}:{job} step {stepno}; assuming bash",
+                    "github-env: couldn't determine shell type for {workflow} step {loc:#?}; assuming bash",
                     workflow = step.workflow().key.presentation_path(),
-                    job = step.parent.id(),
-                    stepno = step.index
+                    loc = step.location(),
                 );
 
                 // If we can't infer a shell for this `run:`, assume that it's
@@ -432,7 +439,7 @@ impl Audit for GitHubEnv {
     async fn audit_composite_step<'doc>(
         &self,
         step: &super::CompositeStep<'doc>,
-        _config: &Config,
+        _group: &crate::registry::input::InputGroup,
     ) -> Result<Vec<Finding<'doc>>, AuditError> {
         let mut findings = vec![];
 
@@ -475,7 +482,7 @@ impl Audit for GitHubEnv {
 
 #[cfg(test)]
 mod tests {
-    use crate::audit::Audit;
+    use crate::audit::Audit as _;
     use crate::audit::github_env::{GITHUB_ENV_WRITE_CMD, GitHubEnv};
     use crate::state::AuditState;
 
@@ -638,6 +645,17 @@ mod tests {
             ("echo \"foo\" | out-file $Env:GitHub_Env -Append", true),
             ("echo \"foo\" | out-File $Env:GitHub_Env -Append", true),
             ("echo \"foo\" | OUT-FILE $Env:GitHub_Env -Append", true),
+            // Both queries must also match GITHUB_PATH.
+            ("foo >> $env:GITHUB_PATH", true),
+            ("foo | Tee-Object -FilePath \"$env:GITHUB_PATH\"", true),
+            // Extras must not interrupt destination matching.
+            ("foo >> <# destination #> $env:GITHUB_ENV", true),
+            ("foo | Out-File `\n  -FilePath $env:GITHUB_ENV", true),
+            // Inline parameter values and array elements have additional wrappers.
+            ("Out-File -FilePath:$env:GITHUB_ENV", true),
+            ("Out-File -FilePath:\"$env:GITHUB_ENV\"", true),
+            ("Out-File $foo,$env:GITHUB_ENV", true),
+            ("Out-File -FilePath:$foo,$env:GITHUB_ENV", true),
             // Negative cases (comments should not be detected)
             ("foo >> bar # not $env:GITHUB_ENV", false),
             ("foo >> bar # not ${env:GITHUB_ENV}", false),
@@ -647,6 +665,9 @@ mod tests {
             ),
             ("foo >> GITHUB_ENV", false), // GITHUB_ENV is not a variable
             ("foo >> $GITHUB_ENV", false), // variable but not an envvar
+            ("foo >> '$env:GITHUB_ENV'", false),
+            ("Out-File -FilePath '$env:GITHUB_PATH'", false),
+            ("Write-Host $env:GITHUB_ENV | Out-File other.txt", false),
             (
                 "\"PYTHON_BIN=$PYTHON_BIN\" | Out-File -FilePath GITHUB_ENV -Append",
                 false,

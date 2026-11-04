@@ -54,6 +54,8 @@ cirrus-actions/rebase
 
 contributor-assistant/github-action
 
+convictional/trigger-workflow-and-wait
+
 cpcloud/flake-update-action
 
 crazy-max/ghaction-docker-buildx
@@ -68,6 +70,9 @@ dulvui/godot-android-export
 elstudio/actions-settings
 
 expo/expo-preview-action
+
+extractions/setup-powerpack
+extractions/setup-mdbook
 
 fabasoad/setup-zizmor-action
 

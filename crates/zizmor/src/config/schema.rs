@@ -12,8 +12,8 @@
 use schemars::JsonSchema;
 
 use super::{
-    DependabotCooldownConfig, ForbiddenUsesConfig, RemapConfig, SecretsOutsideEnvConfig,
-    UnpinnedUsesConfig, WorkflowRule,
+    DependabotCooldownConfig, ForbiddenUsesConfig, KnownVulnerableActionsConfig, RemapConfig,
+    SecretsOutsideEnvConfig, SelfHostedRunnerConfig, UnpinnedUsesConfig, WorkflowRule,
 };
 
 /// Base configuration for all audit rules.
@@ -52,6 +52,17 @@ struct ForbiddenUsesRuleConfig {
     config: Option<ForbiddenUsesConfig>,
 }
 
+/// Configuration for the `self-hosted-runner` audit.
+#[derive(Clone, Debug, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SelfHostedRunnerRuleConfig {
+    #[serde(flatten)]
+    base: BaseRuleConfig,
+
+    #[serde(default)]
+    config: Option<SelfHostedRunnerConfig>,
+}
+
 /// Configuration for the `secrets-outside-env` audit.
 #[derive(Clone, Debug, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -72,6 +83,17 @@ struct UnpinnedUsesRuleConfig {
 
     #[serde(default)]
     config: UnpinnedUsesConfig,
+}
+
+/// Configuration for the `known-vulnerable-actions` audit.
+#[derive(Debug, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct KnownVulnerableActionsRuleConfig {
+    #[serde(flatten)]
+    base: BaseRuleConfig,
+
+    #[serde(default)]
+    config: Option<KnownVulnerableActionsConfig>,
 }
 
 macro_rules! define_audit_rules {
@@ -96,6 +118,7 @@ macro_rules! define_audit_rules {
 define_audit_rules! {
     artipacked,
     unsound_contains,
+    unsound_ternary,
     excessive_permissions,
     dangerous_triggers,
     impostor_commit,
@@ -103,8 +126,6 @@ define_audit_rules! {
     use_trusted_publishing,
     template_injection,
     hardcoded_container_credentials,
-    self_hosted_runner,
-    known_vulnerable_actions,
     undocumented_permissions,
     insecure_commands,
     github_env,
@@ -126,12 +147,17 @@ define_audit_rules! {
     misfeature,
     superfluous_actions,
     github_app,
-    unpinned_tools;
+    unpinned_tools,
+    adhoc_packages,
+    insecure_url_scheme,
+    self_repository;
 
     [DependabotCooldownRuleConfig] dependabot_cooldown,
     [ForbiddenUsesRuleConfig] forbidden_uses,
+    [SelfHostedRunnerRuleConfig] self_hosted_runner,
     [SecretsOutsideEnvRuleConfig] secrets_outside_env,
     [UnpinnedUsesRuleConfig] unpinned_uses,
+    [KnownVulnerableActionsRuleConfig] known_vulnerable_actions,
 }
 
 /// # zizmor's configuration
@@ -213,11 +239,10 @@ mod tests {
               - foo.yml:invalid
         "#;
         let instance = yaml_serde::from_str::<serde_json::Value>(invalid_ignore).unwrap();
-        let errors = SCHEMA_VALIDATOR.iter_errors(&instance).into_errors();
-        insta::assert_snapshot!(errors, @r#"
-        Validation errors:
-        01: "foo.yml:invalid" does not match "^[^:]+\.ya?ml(:[1-9][0-9]*)?(:[1-9][0-9]*)?$"
-        "#);
+        let error = SCHEMA_VALIDATOR
+            .validate(&instance)
+            .expect_err("invalid workflow rule should be rejected");
+        insta::assert_snapshot!(error, @r#""foo.yml:invalid" does not match "^[^:]+\.ya?ml(:[1-9][0-9]*)?(:[1-9][0-9]*)?$""#);
     }
 
     #[test]
@@ -323,11 +348,10 @@ mod tests {
                 actions/checkout: unknown-policy
         "#;
         let instance = yaml_serde::from_str::<serde_json::Value>(unknown_policy).unwrap();
-        let errors = SCHEMA_VALIDATOR.iter_errors(&instance).into_errors();
-        insta::assert_snapshot!(errors, @r#"
-        Validation errors:
-        01: "unknown-policy" is not valid under any of the schemas listed in the 'oneOf' keyword
-        "#);
+        let error = SCHEMA_VALIDATOR
+            .validate(&instance)
+            .expect_err("unknown pinning policy should be rejected");
+        insta::assert_snapshot!(error, @r#""unknown-policy" is not valid under any of the schemas listed in the 'oneOf' keyword"#);
     }
 
     #[test]

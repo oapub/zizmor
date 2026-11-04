@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::ops::Deref as _;
 
 use github_actions_expressions::{
     Expr, SpannedExpr,
@@ -37,9 +37,13 @@ impl Audit for OverprovisionedSecrets {
     async fn audit_raw<'doc>(
         &self,
         input: &'doc AuditInput,
-        _config: &crate::config::Config,
+        _group: &crate::registry::input::InputGroup,
     ) -> Result<Vec<super::Finding<'doc>>, AuditError> {
         let mut findings = vec![];
+
+        if !input.supports_gha_template_syntax() {
+            return Ok(findings);
+        }
 
         for (expr, span) in parse_fenced_expressions_from_routable(input) {
             let Ok(parsed) = Expr::parse(expr.as_bare()) else {

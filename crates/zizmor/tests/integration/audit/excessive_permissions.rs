@@ -1,10 +1,10 @@
-use crate::common::{input_under_test, zizmor};
 use anyhow::Result;
+use zizmor_dev::{Zizmor, input_under_test};
 
 #[test]
 fn test_issue_336_repro() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test(
                 "excessive-permissions/issue-336-repro.yml"
             ))
@@ -18,7 +18,7 @@ fn test_issue_336_repro() -> Result<()> {
 #[test]
 fn test_issue_336_repro_pedantic() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test(
                 "excessive-permissions/issue-336-repro.yml"
             ))
@@ -43,7 +43,7 @@ fn test_issue_336_repro_pedantic() -> Result<()> {
 #[test]
 fn test_workflow_default_perms_pedantic() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test(
                 "excessive-permissions/workflow-default-perms.yml"
             ))
@@ -90,7 +90,7 @@ fn test_workflow_default_perms_pedantic() -> Result<()> {
 #[test]
 fn test_workflow_read_all() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test(
                 "excessive-permissions/workflow-read-all.yml"
             ))
@@ -114,7 +114,7 @@ fn test_workflow_read_all() -> Result<()> {
 #[test]
 fn test_workflow_write_all() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test(
                 "excessive-permissions/workflow-write-all.yml"
             ))
@@ -138,7 +138,7 @@ fn test_workflow_write_all() -> Result<()> {
 #[test]
 fn test_workflow_empty_perms() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test(
                 "excessive-permissions/workflow-empty-perms.yml"
             ))
@@ -152,7 +152,7 @@ fn test_workflow_empty_perms() -> Result<()> {
 #[test]
 fn test_jobs_broaden_permissions() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test(
                 "excessive-permissions/jobs-broaden-permissions.yml"
             ))
@@ -198,7 +198,7 @@ fn test_jobs_broaden_permissions() -> Result<()> {
 #[test]
 fn test_workflow_write_explicit() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test(
                 "excessive-permissions/workflow-write-explicit.yml"
             ))
@@ -238,7 +238,7 @@ fn test_workflow_write_explicit() -> Result<()> {
 #[test]
 fn test_workflow_default_perms_all_jobs_explicit() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test(
                 "excessive-permissions/workflow-default-perms-all-jobs-explicit.yml"
             ))
@@ -252,7 +252,7 @@ fn test_workflow_default_perms_all_jobs_explicit() -> Result<()> {
 #[test]
 fn test_issue_472_repro() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test(
                 "excessive-permissions/issue-472-repro.yml"
             ))
@@ -266,7 +266,7 @@ fn test_issue_472_repro() -> Result<()> {
     22 | |     # normal permissions finding here, since callers are always
     23 | |     # responsible for setting permissions, even if the workflow
     24 | |     # is reusable-only
-    25 | |     uses: ./.github/workflows/fake.yml
+    25 | |     uses: $/.github/workflows/fake.yml
        | |                                       ^
        | |                                       |
        | |_______________________________________this job
@@ -284,7 +284,7 @@ fn test_issue_472_repro() -> Result<()> {
 #[test]
 fn test_reusable_workflow_call() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test(
                 "excessive-permissions/reusable-workflow-call.yml"
             ))
@@ -296,7 +296,7 @@ fn test_reusable_workflow_call() -> Result<()> {
      7 | /   job1:
      8 | |     name: job1
      9 | |     # finding: reusable jobs should always specify their permissions
-    10 | |     uses: ./.github/workflows/zizmor-child.yml
+    10 | |     uses: $/.github/workflows/zizmor-child.yml
        | |                                               ^
        | |                                               |
        | |_______________________________________________this job
@@ -314,7 +314,7 @@ fn test_reusable_workflow_call() -> Result<()> {
 #[test]
 fn test_reusable_workflow_other_triggers() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test(
                 "excessive-permissions/reusable-workflow-other-triggers.yml"
             ))
@@ -329,7 +329,7 @@ fn test_reusable_workflow_other_triggers() -> Result<()> {
      4 | |   workflow_call:
     ...  |
     22 | |     # responsible for setting permissions
-    23 | |     uses: ./.github/workflows/fake.yml
+    23 | |     uses: $/.github/workflows/fake.yml
        | |_______________________________________^ default permissions used due to no permissions: block
        |
        = note: audit confidence → Medium
@@ -358,7 +358,7 @@ fn test_reusable_workflow_other_triggers() -> Result<()> {
     20 | |     name: job2
     21 | |     # normal permissions finding here, since callers are always
     22 | |     # responsible for setting permissions
-    23 | |     uses: ./.github/workflows/fake.yml
+    23 | |     uses: $/.github/workflows/fake.yml
        | |                                       ^
        | |                                       |
        | |_______________________________________this job

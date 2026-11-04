@@ -1,4 +1,4 @@
-#!/usr/bin/env -S uv run --script
+#!/usr/bin/env -S uv run --script --locked
 # /// script
 # requires-python = ">=3.13"
 # dependencies = [
@@ -151,8 +151,6 @@ _WORKFLOW_TRIGGERS_TO_EVENTS: dict[str, list[str]] = {
         "auto_merge_enabled",
         "auto_merge_disabled",
     ],
-    # Unused.
-    # "pull_request_comment": []
     "pull_request_review": [
         "submitted",
         "edited",
@@ -376,6 +374,6 @@ if __name__ == "__main__":
         patterns_to_capabilities[context] = "fixed"
 
     with _OUT.open("w") as io:
-        writer = csv.writer(io)
+        writer = csv.writer(io, lineterminator="\n")
         for pattern, cap in sorted(patterns_to_capabilities.items(), key=itemgetter(0)):
             writer.writerow([pattern, cap])

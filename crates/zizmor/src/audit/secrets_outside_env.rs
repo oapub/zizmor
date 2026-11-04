@@ -3,10 +3,9 @@ use subfeature::Subfeature;
 
 use crate::{
     audit::{Audit, AuditError, AuditLoadError, audit_meta},
-    config::Config,
     finding::{
         Confidence, Finding, Persona, Severity,
-        location::{Feature, Locatable, Location},
+        location::{Feature, Locatable as _, Location},
     },
     models::workflow::{JobCommon as _, NormalJob},
     state::AuditState,
@@ -33,9 +32,9 @@ impl Audit for SecretsOutsideEnvironment {
     async fn audit_normal_job<'doc>(
         &self,
         job: &NormalJob<'doc>,
-        config: &Config,
+        group: &crate::registry::input::InputGroup,
     ) -> Result<Vec<Finding<'doc>>, AuditError> {
-        if job.parent().has_workflow_call() {
+        if job.parent().workflow_call().is_some() {
             // Reusable workflows and environments don't interact well, and are more or less
             // completely undocumented in terms of behavior. We don't flag any findings
             // for them, since users will discover that a reusable workflow that activates
@@ -74,7 +73,8 @@ impl Audit for SecretsOutsideEnvironment {
                 // Check to see whether we allow this secret. The policy always includes
                 // GITHUB_TOKEN, since it's always latently available.
                 if let Some(secret_name) = context.single_tail()
-                    && config
+                    && group
+                        .config()
                         .secrets_outside_env_policy
                         .allow
                         .contains(&secret_name.to_ascii_lowercase())
@@ -90,6 +90,9 @@ impl Audit for SecretsOutsideEnvironment {
                         .persona(Persona::Auditor)
                         .severity(Severity::Medium)
                         .confidence(Confidence::High)
+                        // Make the entire job a hidden span, so that the user can place
+                        // an ignore comment anywhere in the job.
+                        .add_location(job.location().hidden())
                         .add_location(job.location().key_only())
                         .add_raw_location(Location::new(
                             job.location()

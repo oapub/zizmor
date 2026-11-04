@@ -1094,6 +1094,382 @@ permissions:
     ");
 }
 
+/// Apply a single `Op::Remove` at `route` to `yaml` and return the
+/// resulting source wrapped with `format_patch` for snapshotting.
+fn remove(yaml: &str, route: yamlpath::Route) -> String {
+    let document = yamlpath::Document::new(yaml).unwrap();
+    let result = apply_yaml_patches(
+        &document,
+        &[Patch {
+            route,
+            operation: Op::Remove,
+        }],
+    )
+    .unwrap();
+    format_patch(result.source())
+}
+
+#[test]
+fn test_remove_block_sequence_member() {
+    insta::assert_snapshot!(remove("items:\n  - a\n  - b\n  - c\n", route!("items", 1)), @"
+    --- PATCH ---
+    items:
+      - a
+      - c
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_flow_mapping_member() {
+    // The flow mapping stays intact; only the targeted member (and its
+    // separator) is removed.
+
+    // First member: the following comma and space go with it.
+    insta::assert_snapshot!(remove("m: { a: 1, b: 2, c: 3 }\n", route!("m", "a")), @"
+    --- PATCH ---
+    m: { b: 2, c: 3 }
+
+    --- END PATCH ---
+    ");
+
+    // Middle member.
+    insta::assert_snapshot!(remove("m: { a: 1, b: 2, c: 3 }\n", route!("m", "b")), @"
+    --- PATCH ---
+    m: { a: 1, c: 3 }
+
+    --- END PATCH ---
+    ");
+
+    // Last member: the preceding comma goes with it.
+    insta::assert_snapshot!(remove("m: { a: 1, b: 2, c: 3 }\n", route!("m", "c")), @"
+    --- PATCH ---
+    m: { a: 1, b: 2 }
+
+    --- END PATCH ---
+    ");
+
+    // Only member: collapses to an empty flow mapping.
+    insta::assert_snapshot!(remove("m: {a: 1}\n", route!("m", "a")), @"
+    --- PATCH ---
+    m: {}
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_flow_sequence_member() {
+    insta::assert_snapshot!(remove("s: [a, b, c]\n", route!("s", 0)), @"
+    --- PATCH ---
+    s: [b, c]
+
+    --- END PATCH ---
+    ");
+
+    insta::assert_snapshot!(remove("s: [a, b, c]\n", route!("s", 1)), @"
+    --- PATCH ---
+    s: [a, c]
+
+    --- END PATCH ---
+    ");
+
+    insta::assert_snapshot!(remove("s: [a, b, c]\n", route!("s", 2)), @"
+    --- PATCH ---
+    s: [a, b]
+
+    --- END PATCH ---
+    ");
+
+    // Only element: collapses to an empty flow sequence.
+    insta::assert_snapshot!(remove("s: [a]\n", route!("s", 0)), @"
+    --- PATCH ---
+    s: []
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_nested_flow_collections() {
+    // These are the cases that token-sniffing (`contains('{')` /
+    // `contains('[')`) cannot handle: the container kind is resolved from
+    // the parse tree, not from which bracket characters happen to appear.
+
+    // A flow mapping nested inside a flow sequence.
+    insta::assert_snapshot!(remove("matrix: [{os: linux}, {os: windows}]\n", route!("matrix", 0)), @"
+    --- PATCH ---
+    matrix: [{os: windows}]
+
+    --- END PATCH ---
+    ");
+
+    // Removing a key from a flow mapping that is itself an element of a
+    // flow sequence.
+    insta::assert_snapshot!(remove("s: [{a: 1, b: 2}]\n", route!("s", 0, "a")), @"
+    --- PATCH ---
+    s: [{b: 2}]
+
+    --- END PATCH ---
+    ");
+
+    // A flow sequence nested inside a flow mapping.
+    insta::assert_snapshot!(remove("m: {x: [1, 2, 3]}\n", route!("m", "x", 1)), @"
+    --- PATCH ---
+    m: {x: [1, 3]}
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_multiline_flow_mapping_member() {
+    let yaml = "m: {\n  a: 1,\n  b: 2,\n  c: 3\n}\n";
+
+    // Middle member keeps the surrounding indentation well-formed.
+    insta::assert_snapshot!(remove(yaml, route!("m", "b")), @"
+    --- PATCH ---
+    m: {
+      a: 1,
+      c: 3
+    }
+
+    --- END PATCH ---
+    ");
+
+    // Last member drops the preceding comma and its line.
+    insta::assert_snapshot!(remove(yaml, route!("m", "c")), @"
+    --- PATCH ---
+    m: {
+      a: 1,
+      b: 2
+    }
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_sole_flow_member_collapses_with_spaces() {
+    // Interior whitespace around the sole member is dropped too.
+    insta::assert_snapshot!(remove("m: { a: 1 }\n", route!("m", "a")), @"
+    --- PATCH ---
+    m: {}
+
+    --- END PATCH ---
+    ");
+    insta::assert_snapshot!(remove("s: [ a ]\n", route!("s", 0)), @"
+    --- PATCH ---
+    s: []
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_does_not_follow_final_alias() {
+    // Removing `b` (whose value is the alias `*x`) must delete `b: *x`, not
+    // the anchor definition `a: &x 1` that the alias resolves to.
+    let yaml = "m:\n  a: &x 1\n  b: *x\n";
+    insta::assert_snapshot!(remove(yaml, route!("m", "b")), @"
+    --- PATCH ---
+    m:
+      a: &x 1
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_block_valued_key_removes_subtree() {
+    let yaml = "a:\n  x: 1\n  y: 2\nb: 3\n";
+    insta::assert_snapshot!(remove(yaml, route!("a")), @"
+    --- PATCH ---
+    b: 3
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_flow_sequence_member_nested_in_block_mapping() {
+    // The value is a flow sequence on the same line as its block-mapping
+    // key; only the flow element is removed, not the whole line.
+    let yaml = "a: [1, 2, 3]\nb: 4\n";
+    insta::assert_snapshot!(remove(yaml, route!("a", 1)), @"
+    --- PATCH ---
+    a: [1, 3]
+    b: 4
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_flow_member_preserves_trailing_line_comment() {
+    let yaml = "s: [a, b, c]  # tail\n";
+    insta::assert_snapshot!(remove(yaml, route!("s", 1)), @"
+    --- PATCH ---
+    s: [a, c]  # tail
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_collapses_empty_block_mapping_parent() {
+    // Removing the only key under `env:` would leave a dangling `env:`
+    // (null value), so the whole `env:` block is removed instead.
+    let yaml = "env:\n  ONLY: 1\nother: 2\n";
+    insta::assert_snapshot!(remove(yaml, route!("env", "ONLY")), @"
+    --- PATCH ---
+    other: 2
+
+    --- END PATCH ---
+    ");
+
+    // With a sibling present, only the targeted key is removed.
+    let yaml = "env:\n  A: 1\n  B: 2\nother: 3\n";
+    insta::assert_snapshot!(remove(yaml, route!("env", "A")), @"
+    --- PATCH ---
+    env:
+      B: 2
+    other: 3
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_collapses_nested_block_chain() {
+    // A chain of single-key mappings collapses all the way up to the first
+    // ancestor that retains other content.
+    let yaml = "a:\n  b:\n    c: 1\nd: 2\n";
+    insta::assert_snapshot!(remove(yaml, route!("a", "b", "c")), @"
+    --- PATCH ---
+    d: 2
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_collapses_empty_block_sequence_parent() {
+    let yaml = "list:\n  - x\nother: 2\n";
+    insta::assert_snapshot!(remove(yaml, route!("list", 0)), @"
+    --- PATCH ---
+    other: 2
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_collapse_stops_at_populated_ancestor() {
+    // Realistic case: collapsing `env` must not disturb its sibling
+    // `runs-on` under the same job.
+    let yaml = "jobs:\n  build:\n    env:\n      ONLY: 1\n    runs-on: ubuntu\n";
+    insta::assert_snapshot!(remove(yaml, route!("jobs", "build", "env", "ONLY")), @"
+    --- PATCH ---
+    jobs:
+      build:
+        runs-on: ubuntu
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_sole_flow_member_does_not_collapse_parent() {
+    // Flow containers are valid when empty, so they are left as `{}`/`[]`
+    // rather than collapsing the enclosing key.
+    insta::assert_snapshot!(remove("env: {ONLY: 1}\nother: 2\n", route!("env", "ONLY")), @"
+    --- PATCH ---
+    env: {}
+    other: 2
+
+    --- END PATCH ---
+    ");
+    insta::assert_snapshot!(remove("tags: [only]\nother: 2\n", route!("tags", 0)), @"
+    --- PATCH ---
+    tags: []
+    other: 2
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_sole_env_key_preserves_step_sequence_marker() {
+    // Regression: removing the only key under a *step-level* `env:` collapses
+    // `env` (good), but here `env:` is the first key of a `-` step item, so
+    // whole-line block removal also eats the `- ` marker. That turns the
+    // `steps:` list into a mapping and silently corrupts the document.
+    let yaml = "\
+jobs:
+  build:
+    steps:
+      - env:
+          ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+        run: echo hi
+";
+    insta::assert_snapshot!(
+        remove(
+            yaml,
+            route!("jobs", "build", "steps", 0, "env", "ACTIONS_ALLOW_UNSECURE_COMMANDS")
+        ),
+        @"
+    --- PATCH ---
+    jobs:
+      build:
+        steps:
+          - run: echo hi
+
+    --- END PATCH ---
+    "
+    );
+}
+
+#[test]
+fn test_remove_first_step_key_slides_nested_sibling_onto_marker() {
+    // The sibling that slides onto the `- ` marker keeps its own nested
+    // block correctly indented.
+    let yaml = "\
+steps:
+  - env:
+      X: 1
+    uses:
+      a: b
+";
+    insta::assert_snapshot!(remove(yaml, route!("steps", 0, "env")), @"
+    --- PATCH ---
+    steps:
+      - uses:
+          a: b
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_remove_non_first_step_key_keeps_marker() {
+    // Removing a key that does not share the `- ` line uses ordinary
+    // whole-line removal, leaving the marker (and first key) intact.
+    let yaml = "\
+steps:
+  - env: prod
+    run: echo hi
+";
+    insta::assert_snapshot!(remove(yaml, route!("steps", 0, "run")), @"
+    --- PATCH ---
+    steps:
+      - env: prod
+
+    --- END PATCH ---
+    ");
+}
+
 #[test]
 fn test_multiple_operations_preserve_comments() {
     let original = r#"
@@ -1940,18 +2316,18 @@ fn test_debug_indentation_issue() {
     assert!(is_list_item, "Path should indicate this is a list item");
 
     // Test indentation calculation for key-value pairs
-    if let Some(first_line) = feature_with_ws.lines().next() {
-        if let Some(_colon_pos) = first_line.find(':') {
-            let key_indent = &first_line[..first_line.len() - first_line.trim_start().len()];
-            let final_indent = format!("{key_indent}  ");
+    if let Some(first_line) = feature_with_ws.lines().next()
+        && let Some(_colon_pos) = first_line.find(':')
+    {
+        let key_indent = &first_line[..first_line.len() - first_line.trim_start().len()];
+        let final_indent = format!("{key_indent}  ");
 
-            // Assert that indentation calculation works correctly
-            assert!(!final_indent.is_empty(), "Final indent should not be empty");
-            assert!(
-                final_indent.len() >= 2,
-                "Final indent should have at least 2 spaces"
-            );
-        }
+        // Assert that indentation calculation works correctly
+        assert!(!final_indent.is_empty(), "Final indent should not be empty");
+        assert!(
+            final_indent.len() >= 2,
+            "Final indent should have at least 2 spaces"
+        );
     }
 
     // Test leading whitespace extraction function
@@ -2034,10 +2410,10 @@ jobs:
                             // Verify that we can iterate over the env mapping
                             let mut found_identity = false;
                             for (k, _v) in env_mapping {
-                                if let yaml_serde::Value::String(key_str) = k {
-                                    if key_str == "IDENTITY" {
-                                        found_identity = true;
-                                    }
+                                if let yaml_serde::Value::String(key_str) = k
+                                    && key_str == "IDENTITY"
+                                {
+                                    found_identity = true;
                                 }
                             }
                             assert!(found_identity, "Should find IDENTITY key in env mapping");
@@ -3597,5 +3973,352 @@ foo:
     foo:
       - abc
       - [def, ghi]
+    ");
+}
+
+#[test]
+fn test_add_nested_block_mapping() {
+    let original = r#"
+top:
+  existing: 1
+"#;
+
+    let document = yamlpath::Document::new(original).unwrap();
+
+    // A value nested two levels deep.
+    let value: yaml_serde::Value = yaml_serde::from_str("outer:\n  inner: value\n").unwrap();
+
+    let operations = vec![Patch {
+        route: route!("top"),
+        operation: Op::Add {
+            key: "added".to_string(),
+            value,
+        },
+    }];
+
+    let result = apply_yaml_patches(&document, &operations).unwrap();
+
+    insta::assert_snapshot!(format_patch(result.source()), @r"
+    --- PATCH ---
+
+    top:
+      existing: 1
+      added:
+        outer:
+          inner: value
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_replace_nested_block_mapping() {
+    let original = r#"
+top:
+  target:
+    old: 1
+"#;
+
+    let document = yamlpath::Document::new(original).unwrap();
+
+    // Control: replacing the same route with a *scalar* works, confirming
+    // the route itself is correct.
+    let scalar_ops = vec![Patch {
+        route: route!("top", "target"),
+        operation: Op::Replace(yaml_serde::Value::String("replaced".to_string())),
+    }];
+    let scalar_result = apply_yaml_patches(&document, &scalar_ops);
+    assert!(
+        scalar_result.is_ok(),
+        "control case should succeed: {:?}",
+        scalar_result.err()
+    );
+
+    let value: yaml_serde::Value = yaml_serde::from_str("outer:\n  inner: value\n").unwrap();
+    let operations = vec![Patch {
+        route: route!("top", "target"),
+        operation: Op::Replace(value),
+    }];
+
+    let result = apply_yaml_patches(&document, &operations)
+        .expect("Op::Replace with a block mapping value should succeed");
+
+    insta::assert_snapshot!(format_patch(result.source()), @r"
+    --- PATCH ---
+
+    top:
+      target:
+        outer:
+          inner: value
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_replace_block_sequence() {
+    let original = r#"
+top:
+  target:
+    old: 1
+"#;
+
+    let document = yamlpath::Document::new(original).unwrap();
+    let value: yaml_serde::Value = yaml_serde::from_str("- a\n- b\n").unwrap();
+
+    let operations = vec![Patch {
+        route: route!("top", "target"),
+        operation: Op::Replace(value),
+    }];
+
+    let result = apply_yaml_patches(&document, &operations).unwrap();
+
+    insta::assert_snapshot!(format_patch(result.source()), @r"
+    --- PATCH ---
+
+    top:
+      target:
+        - a
+        - b
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_replace_single_entry_block_mapping() {
+    let original = r#"
+top:
+  target:
+    old: 1
+"#;
+
+    let document = yamlpath::Document::new(original).unwrap();
+    let value: yaml_serde::Value = yaml_serde::from_str("new: value\n").unwrap();
+    let operations = vec![Patch {
+        route: route!("top", "target"),
+        operation: Op::Replace(value),
+    }];
+
+    let result = apply_yaml_patches(&document, &operations).unwrap();
+
+    insta::assert_snapshot!(format_patch(result.source()), @r"
+    --- PATCH ---
+
+    top:
+      target:
+        new: value
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_replace_single_entry_block_sequence() {
+    let original = r#"
+top:
+  target:
+    old: 1
+"#;
+
+    let document = yamlpath::Document::new(original).unwrap();
+    let value: yaml_serde::Value = yaml_serde::from_str("- value\n").unwrap();
+    let operations = vec![Patch {
+        route: route!("top", "target"),
+        operation: Op::Replace(value),
+    }];
+
+    let result = apply_yaml_patches(&document, &operations).unwrap();
+
+    insta::assert_snapshot!(format_patch(result.source()), @r"
+    --- PATCH ---
+
+    top:
+      target:
+        - value
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_replace_empty_collections_inline() {
+    let original = r#"
+top:
+  target:
+    old: 1
+"#;
+
+    for (serialized, expected) in [("{}", "{}"), ("[]", "[]")] {
+        let document = yamlpath::Document::new(original).unwrap();
+        let value: yaml_serde::Value = yaml_serde::from_str(serialized).unwrap();
+        let operations = vec![Patch {
+            route: route!("top", "target"),
+            operation: Op::Replace(value),
+        }];
+
+        let result = apply_yaml_patches(&document, &operations).unwrap();
+        assert_eq!(result.source(), format!("\ntop:\n  target: {expected}\n"));
+    }
+}
+
+/// This is a backstop test; `Replace` currently mistakes any colon in a
+/// sequence scalar for a mapping key separator.
+#[test]
+#[should_panic]
+fn test_replace_sequence_scalar_containing_colon() {
+    let original = r#"
+top:
+  - https://example.com
+"#;
+
+    let document = yamlpath::Document::new(original).unwrap();
+    let operations = vec![Patch {
+        route: route!("top", 0),
+        operation: Op::Replace(yaml_serde::Value::String("new".to_string())),
+    }];
+
+    let result = apply_yaml_patches(&document, &operations).unwrap();
+    assert_eq!(result.source(), "\ntop:\n  - new\n");
+}
+
+/// This is a backstop test; `Replace` does not yet indent block collections
+/// relative to a block sequence marker.
+#[test]
+#[should_panic]
+fn test_replace_block_sequence_scalar_with_mapping() {
+    let original = r#"
+top:
+  - old
+"#;
+
+    let document = yamlpath::Document::new(original).unwrap();
+    let value: yaml_serde::Value = yaml_serde::from_str("new:\n  child: value\n").unwrap();
+    let operations = vec![Patch {
+        route: route!("top", 0),
+        operation: Op::Replace(value),
+    }];
+
+    let result = apply_yaml_patches(&document, &operations).unwrap();
+    assert_eq!(result.source(), "\ntop:\n  - new:\n      child: value\n");
+}
+
+#[test]
+fn test_replace_deeply_nested_block_mapping() {
+    let original = r#"
+top:
+  target:
+    old: 1
+"#;
+
+    let document = yamlpath::Document::new(original).unwrap();
+    let value: yaml_serde::Value =
+        yaml_serde::from_str("a:\n  b:\n    c:\n      d: deep\n").unwrap();
+
+    let operations = vec![Patch {
+        route: route!("top", "target"),
+        operation: Op::Replace(value),
+    }];
+
+    let result = apply_yaml_patches(&document, &operations).unwrap();
+
+    // Every level keeps its own relative depth.
+    insta::assert_snapshot!(format_patch(result.source()), @r"
+    --- PATCH ---
+
+    top:
+      target:
+        a:
+          b:
+            c:
+              d: deep
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_add_nested_block_mapping_preserves_comments() {
+    // Comment preservation is the reason to reach for yamlpatch over a
+    // serialize/deserialize round-trip, so pin it together with the nesting.
+    let original = r#"# Top-of-file comment.
+outer:
+  # Comment attached to the existing entry.
+  existing:
+    nested:
+      key: 1  # trailing comment
+# Final comment.
+"#;
+
+    let document = yamlpath::Document::new(original).unwrap();
+    let value: yaml_serde::Value =
+        yaml_serde::from_str("first:\n  second: value\nsibling: other\n").unwrap();
+
+    let operations = vec![Patch {
+        route: route!("outer"),
+        operation: Op::Add {
+            key: "added".to_string(),
+            value,
+        },
+    }];
+
+    let result = apply_yaml_patches(&document, &operations).unwrap();
+
+    insta::assert_snapshot!(format_patch(result.source()), @r"
+    --- PATCH ---
+    # Top-of-file comment.
+    outer:
+      # Comment attached to the existing entry.
+      existing:
+        nested:
+          key: 1  # trailing comment
+      added:
+        first:
+          second: value
+        sibling: other
+    # Final comment.
+
+    --- END PATCH ---
+    ");
+}
+
+#[test]
+fn test_merge_into_nested_block_mapping() {
+    // `Op::MergeInto` lowers to `Op::Add` when the key is absent, so it is
+    // subject to the same flattening bug.
+    let original = r#"
+outer:
+  target:
+    existing: 1
+"#;
+
+    let document = yamlpath::Document::new(original).unwrap();
+    let mut updates: indexmap::IndexMap<String, yaml_serde::Value> = indexmap::IndexMap::new();
+    updates.insert(
+        "first".to_string(),
+        yaml_serde::from_str("second: value\n").unwrap(),
+    );
+
+    let operations = vec![Patch {
+        route: route!("outer", "target"),
+        operation: Op::MergeInto {
+            key: "added".to_string(),
+            updates,
+        },
+    }];
+
+    let result = apply_yaml_patches(&document, &operations).unwrap();
+
+    insta::assert_snapshot!(format_patch(result.source()), @r"
+    --- PATCH ---
+
+    outer:
+      target:
+        existing: 1
+        added:
+          first:
+            second: value
+
+    --- END PATCH ---
     ");
 }

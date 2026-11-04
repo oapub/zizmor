@@ -7,7 +7,8 @@ use indexmap::IndexMap;
 
 use crate::{
     audit::{self, Audit, AuditLoadError},
-    finding::{Confidence, Finding, Persona, Severity},
+    cli::FixMode,
+    finding::{Confidence, Finding, FixDisposition, Persona, Severity},
     registry::input::{InputKey, InputRegistry},
     state::AuditState,
 };
@@ -46,6 +47,7 @@ impl AuditRegistry {
 
         register_audit!(audit::artipacked::Artipacked);
         register_audit!(audit::unsound_contains::UnsoundContains);
+        register_audit!(audit::unsound_ternary::UnsoundTernary);
         register_audit!(audit::excessive_permissions::ExcessivePermissions);
         register_audit!(audit::dangerous_triggers::DangerousTriggers);
         register_audit!(audit::impostor_commit::ImpostorCommit);
@@ -81,6 +83,9 @@ impl AuditRegistry {
         register_audit!(audit::superfluous_actions::SuperfluousActions);
         register_audit!(audit::github_app::GitHubApp);
         register_audit!(audit::unpinned_tools::UnpinnedTools);
+        register_audit!(audit::adhoc_packages::AdhocPackages);
+        register_audit!(audit::insecure_url_scheme::InsecureURLScheme);
+        register_audit!(audit::self_repository::SelfRepository);
 
         Ok(registry)
     }
@@ -219,9 +224,7 @@ impl<'a> FindingRegistry<'a> {
     ///
     /// Returns true if every finding has at least one applicable fix based on the mode,
     /// meaning no manual intervention would be required if all fixes are applied successfully.
-    pub(crate) fn all_findings_have_applicable_fixes(&self, fix_mode: crate::FixMode) -> bool {
-        use crate::finding::FixDisposition;
-
+    pub(crate) fn all_findings_have_applicable_fixes(&self, fix_mode: FixMode) -> bool {
         if self.findings.is_empty() {
             return true;
         }
@@ -229,9 +232,9 @@ impl<'a> FindingRegistry<'a> {
         self.findings.iter().all(|finding| {
             finding.fixes.iter().any(|fix| {
                 let disposition_matches = match fix_mode {
-                    crate::FixMode::Safe => matches!(fix.disposition, FixDisposition::Safe),
-                    crate::FixMode::UnsafeOnly => matches!(fix.disposition, FixDisposition::Unsafe),
-                    crate::FixMode::All => true,
+                    FixMode::Safe => matches!(fix.disposition, FixDisposition::Safe),
+                    FixMode::UnsafeOnly => matches!(fix.disposition, FixDisposition::Unsafe),
+                    FixMode::All => true,
                 };
 
                 disposition_matches && matches!(fix.key, InputKey::Local(_))

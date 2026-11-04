@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::ops::Deref as _;
 
 use github_actions_expressions::{
     Expr, SpannedExpr,
@@ -50,7 +50,7 @@ impl Audit for UnsoundContains {
     async fn audit_normal_job<'w>(
         &self,
         job: &super::NormalJob<'w>,
-        _config: &crate::config::Config,
+        _group: &crate::registry::input::InputGroup,
     ) -> Result<Vec<super::Finding<'w>>, AuditError> {
         let conditions = job.conditions().filter_map(|(cond, loc)| {
             if let If::Expr(expr) = cond {
@@ -103,7 +103,7 @@ impl UnsoundContains {
                 func: _,
                 args: exprs,
             })
-            | Expr::Context(Context { parts: exprs, .. }) => {
+            | Expr::Context(Context { parts: exprs }) => {
                 Box::new(exprs.iter().flat_map(Self::walk_tree_for_unsound_contains))
             }
             Expr::Index(expr) => Self::walk_tree_for_unsound_contains(expr),

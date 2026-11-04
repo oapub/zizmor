@@ -10,16 +10,23 @@ Before auditing, `zizmor` performs an input collection phase.
 
 There are four input sources that `zizmor` knows about:
 
-1. Individual workflow and action files, e.g. `foo.yml` and
-   `my-action/action.yml`;
-2. "Local" GitHub repositories in the form of a directory, e.g. `my-repo/`;
-3. "Remote" GitHub repositories in the form of a "slug", e.g.
+1. Individual input files, e.g. `foo.yml`, `my-action/action.yml`,
+   and `.pre-commit-config.yaml`;
+2. "Local" directories, e.g. `my-repo/`;
+
+    !!! note
+
+        As of zizmor `v1.32.0`, local directories are collected differently
+        depending on whether or not they're a Git repository.
+        See below for more information.
+
+3. "Remote" (GitHub) repositories in the form of a "slug", e.g.
    `pypa/sampleproject`;
 
     !!! tip
 
         By default, a remote repository will be audited from the `HEAD`
-        of the default branch. To control this, you can append a `git`
+        of the default branch. To control this, you can append a Git
         reference to the slug:
 
         ```bash
@@ -50,7 +57,7 @@ There are four input sources that `zizmor` knows about:
     ```bash
     # pipe a workflow from stdin
     cat workflow.yml | zizmor -
-    
+
     # or use a heredoc
     zizmor - <<'EOF'
     on: push
@@ -61,12 +68,12 @@ There are four input sources that `zizmor` knows about:
           - uses: actions/checkout@v3
     EOF
     ```
-    
+
     When reading from stdin, `zizmor` automatically infers the input type
-    (workflow, action, or Dependabot config).
-    
+    (workflow, action, Dependabot config, or pre-commit config/hook definition).
+
     !!! note
-    
+
         `-` cannot be combined with other inputs, and `--fix` is not
         supported with stdin input.
 
@@ -99,18 +106,32 @@ zizmor --collect=actions example/example
 # collect only Dependabot configs
 zizmor --collect=dependabot example/example
 
-# collect only workflows and actions (not Dependabot configs)
+# collect only pre-commit inputs
+zizmor --collect=pre-commit example/example
+
+# collect both workflows and actions, but nothing else
 zizmor --collect=workflows,actions example/example
 ```
 
-!!! warning "Deprecation"
+!!! tip
 
-    `--collect=workflows-only` and `--collect=actions-only` are
-    deprecated aliases for `--collect=workflows` and
-    `--collect=actions`, respectively, as of `v1.15.0`.
-  
-    Users should switch to the non-deprecated forms, as the deprecated
-    forms will be removed in a future release.
+    As of `v1.32.0`, zizmor's input collection is "root aware."
+    That means that zizmor specializes its local directory collection
+    depending on whether the input is a Git root.
+
+    This changes which inputs are collected by default by limiting
+    zizmor to only inputs that would actually be used, rather than
+    trying to discover every possible valid workflow, pre-commit config,
+    etc.
+
+    For example, if `zizmor foo/` is invoked and `foo/` is a Git repository
+    root, then zizmor will collect `foo/.github/workflows/ci.yml` but **not**
+    `foo/third_party/bar/.github/workflows/ci.yml`, since the latter would
+    not actually be used by GitHub Actions.
+
+    However, if `zizmor foo/third_party/` is invoked then all nested
+    inputs *will* be collected, since `foo/third_pary/` is not itself
+    a Git root.
 
 !!! tip
 
@@ -276,7 +297,7 @@ option:
 zizmor --show-audit-urls=always ...
 
 # never show audit documentation URLs
-zizmor --show-audit-urls=never ... 
+zizmor --show-audit-urls=never ...
 ```
 
 !!! note
@@ -355,11 +376,11 @@ zizmor --format=json . | jq .[0]
 
     ```json
     {
-      "ident": "github-env",
-      "desc": "dangerous use of environment file",
-      "url": "https://docs.zizmor.sh/audits/#github-env",
+      "ident": "template-injection",
+      "desc": "code injection via template expansion",
+      "url": "https://docs.zizmor.sh/audits/#template-injection",
       "determinations": {
-        "confidence": "Low",
+        "confidence": "High",
         "severity": "High",
         "persona": "Regular"
       },
@@ -368,15 +389,63 @@ zizmor --format=json . | jq .[0]
           "symbolic": {
             "key": {
               "Local": {
-                "prefix": ".",
-                "given_path": "./tests/integration/test-data/github-env/action.yml"
+                "verbatim_path": "./.github/workflows/ci.yml"
               }
             },
-            "annotation": "write to GITHUB_ENV may allow code execution",
+            "annotation": "this step",
             "route": {
-              "components": [
+              "route": [
                 {
-                  "Key": "runs"
+                  "Key": "jobs"
+                },
+                {
+                  "Key": "greet"
+                },
+                {
+                  "Key": "steps"
+                },
+                {
+                  "Index": 0
+                }
+              ]
+            },
+            "feature_kind": "Normal",
+            "kind": "Hidden"
+          },
+          "concrete": {
+            "location": {
+              "start_point": {
+                "row": 6,
+                "column": 8
+              },
+              "end_point": {
+                "row": 7,
+                "column": 0
+              },
+              "offset_span": {
+                "start": 86,
+                "end": 136
+              }
+            },
+            "feature": "run: echo \"Hello ${{ github.event.issue.title }}\"\n",
+            "comments": []
+          }
+        },
+        {
+          "symbolic": {
+            "key": {
+              "Local": {
+                "verbatim_path": "./.github/workflows/ci.yml"
+              }
+            },
+            "annotation": "may expand into attacker-controllable code",
+            "route": {
+              "route": [
+                {
+                  "Key": "jobs"
+                },
+                {
+                  "Key": "greet"
                 },
                 {
                   "Key": "steps"
@@ -389,29 +458,97 @@ zizmor --format=json . | jq .[0]
                 }
               ]
             },
+            "feature_kind": {
+              "Subfeature": {
+                "after": 13,
+                "fragment": {
+                  "Raw": "github.event.issue.title"
+                }
+              }
+            },
             "kind": "Primary"
           },
           "concrete": {
             "location": {
               "start_point": {
-                "row": 9,
-                "column": 6
+                "row": 6,
+                "column": 29
               },
               "end_point": {
-                "row": 10,
-                "column": 40
+                "row": 6,
+                "column": 53
               },
               "offset_span": {
-                "start": 202,
-                "end": 249
+                "start": 107,
+                "end": 131
               }
             },
-            "feature": "      run: |\n        echo \"foo=$(bar)\" >> $GITHUB_ENV",
+            "feature": "echo \"Hello ${{ github.event.issue.title }}\"",
+            "comments": []
+          }
+        },
+        {
+          "symbolic": {
+            "key": {
+              "Local": {
+                "verbatim_path": "./.github/workflows/ci.yml"
+              }
+            },
+            "annotation": "this run block",
+            "route": {
+              "route": [
+                {
+                  "Key": "jobs"
+                },
+                {
+                  "Key": "greet"
+                },
+                {
+                  "Key": "steps"
+                },
+                {
+                  "Index": 0
+                },
+                {
+                  "Key": "run"
+                }
+              ]
+            },
+            "feature_kind": "KeyOnly",
+            "kind": "Related"
+          },
+          "concrete": {
+            "location": {
+              "start_point": {
+                "row": 6,
+                "column": 8
+              },
+              "end_point": {
+                "row": 6,
+                "column": 11
+              },
+              "offset_span": {
+                "start": 86,
+                "end": 89
+              }
+            },
+            "feature": "run",
             "comments": []
           }
         }
       ],
-      "ignored": false
+      "ignored": false,
+      "fixes": [
+        {
+          "title": "replace expression with environment variable",
+          "key": {
+            "Local": {
+              "verbatim_path": "./.github/workflows/ci.yml"
+            }
+          },
+          "disposition": "unsafe"
+        }
+      ]
     }
     ```
 
@@ -817,7 +954,7 @@ zizmor --config my-zizmor-config.yml /dir/to/audit
 
 [will discover it]: ./configuration.md#discovery
 
-See [Configuration: `rules.<id>.ignore`](./configuration.md#rulesidignore) for
+See [Configuration: `rules.<id>.ignore`](./configuration.md#rules-id-ignore) for
 more details on writing ignore rules.
 
 ### Disabling ignores
@@ -889,8 +1026,8 @@ GH_HOST=custom.ghe.com zizmor ...
 
 ## Limitations
 
-`zizmor` can help you write more secure GitHub workflow and action definitions,
-as well as help you find exploitable bugs in existing definitions.
+`zizmor` can help you secure your CI/CD setup by finding common,
+well-understood flaws.
 
 However, like all tools, `zizmor` is **not a panacea**, and has
 fundamental limitations that must be kept in mind. This page
@@ -901,9 +1038,8 @@ documents some of those limitations.
 `zizmor` is a _static_ analysis tool. It never executes any code, nor does it
 have access to any runtime state.
 
-In contrast, GitHub Actions workflow and action definitions are highly
-dynamic, and can be influenced by inputs that can only be inspected at
-runtime.
+In contrast, many CI/CD systems (like GitHub Actions) are extremely dynamic,
+and can be influenced by inputs that can only be inspected at runtime.
 
 For example, here is a workflow where a job's matrix is generated
 at runtime by a previous job, making the matrix impossible to
@@ -985,10 +1121,9 @@ outside of any repository-tracked state.
 results.
 
 To do this, `zizmor` needs to know a lot of about the inner workings
-of the YAML serialization format that GitHub Actions workflows, action
-definitions, and Dependabot files are expressed in.
+of the YAML serialization format that its inputs are expressed in.
 
-YAML is a complicated serialization format, but GitHub *mostly* uses
+YAML is a complicated serialization format, but typical inputs *mostly* use
 a tractable subset of it. One conspicuous exception to this is
 [YAML anchors](https://yaml.org/spec/1.2.2/#3222-anchors-and-aliases),
 which GitHub has
@@ -1000,7 +1135,94 @@ layer of (arbitrarily deep) indirection and misalignment between the
 deserialized object model (which is what `zizmor` analyzes) and the source
 representation (which `zizmor` spans back to).
 
-If you're having issues with inputs containing anchors, see 
+If you're having issues with inputs containing anchors, see
 [Troubleshooting - YAML anchors].
 
 [Troubleshooting - YAML anchors]: ./troubleshooting.md#yaml-anchors
+
+### Parallel steps { #parallel-steps }
+
+!!! tip
+
+    Support for parallel steps is available in `v1.27.0` and later.
+
+!!! warning "Experimental"
+
+    `zizmor`'s support for parallel steps is currently **experimental**.
+    You will probably encounter bugs if you run `zizmor` on a GitHub Actions
+    workflow that uses parallel steps; please
+    [report any issues you have](https://github.com/zizmorcore/zizmor/issues/new)!
+
+As of June 2026, GitHub Actions [supports parallel steps]. This support adds
+several news features to Actions's syntax, most notably a `#!yaml parallel:` block
+under which steps can be defined to make them run in parallel, rather than
+the default of serial execution.
+
+`zizmor` makes an effort to handle parallel steps in the same way that serial
+steps are handled. In other words: anything that _would_ be flagged in a serial
+step _should_ also be flagged if nested inside a `#!yaml parallel:` block.
+
+[supports parallel steps]: https://github.blog/changelog/2026-06-25-actions-steps-can-now-be-run-in-parallel/
+
+### GitHub Actions workflow lockfiles { #workflow-lockfiles }
+
+!!! tip
+
+    Support for workflow lockfiles is available in `v1.32.0` and later.
+
+!!! warning "Experimental"
+
+    `zizmor`'s support for workflow lockfiles is currently **experimental**.
+    You will probably encounter bugs if you run `zizmor` on a repository
+    that uses a lockfile; please
+    [report any issues you have](https://github.com/zizmorcore/zizmor/issues/new)!
+
+As of October 2026, GitHub Actions [supports lockfiles for workflows].
+
+Workflow lockfiles are currently a "public preview" feature on GitHub itself,
+meaning that they're subject to change before GitHub decides to stabilize them.
+zizmor makes a best-effort attempt to remain compatible with whatever the current
+state of the public preview is, but will not retain backwards compatibility
+beyond what GitHub decides to support.
+
+If you decide to experiment with workflow lockfiles (and `zizmor`'s support
+for them), we **strongly encourage** you to read GitHub's [workflow dependency lockfiles]
+documentation and be aware of some current limitations:
+
+- Workflow lockfiles cannot currently lock reusable workflow calls.
+
+    If you have reusable workflow calls, you currently need to hash-pin them
+    manually. `zizmor`'s [unpinned-uses] audit will flag this.
+
+    !!! tip
+
+        See github/gh-actions-lock#179 for more information.
+
+- Workflow lockfiles cannot currently lock composite actions themselves (i.e.
+  `action.yml` definitions). Composite actions are locked indirectly when _used_
+  by a workflow, but not on their own yet.
+
+    If you have composite action definitions, you currently need to hash-pin them
+    manually. `zizmor`'s [unpinned-uses] audit will flag this.
+
+    !!! tip
+
+        See github/gh-actions-lock#183 for more information.
+
+- Workflow lockfiles cannot currently lock some other forms of action mutability,
+  including Docker images.
+
+    If you have Docker image references, you currently need to hash-pin them
+    manually. `zizmor`'s [unpinned-images] audit will flag this.
+
+    !!! tip
+
+        See github/gh-actions-lock#128 for more information.
+
+[supports lockfiles for workflows]: https://github.blog/changelog/2026-10-14-github-actions-workflow-lockfiles-in-public-preview/
+
+[workflow dependency lockfiles]: https://docs.github.com/en/actions/concepts/security/workflow-dependency-lockfiles
+
+[unpinned-uses]: ./audits.md#unpinned-uses
+
+[unpinned-images]: ./audits.md#unpinned-images

@@ -1,14 +1,17 @@
-use github_actions_models::common::Uses;
-use github_actions_models::workflow::Job;
-use github_actions_models::workflow::job::StepBody;
+use std::sync::LazyLock;
+
+use itertools::Itertools as _;
 
 use super::{Audit, AuditLoadError, audit_meta};
 use crate::audit::AuditError;
-use crate::config::Config;
 use crate::finding::{Confidence, Finding, Severity};
-use crate::models::uses::RepositoryUsesExt;
-use crate::models::workflow::Workflow;
+use crate::models::coordinate::ActionCoordinate;
+use crate::models::workflow::{Job, Workflow};
 use crate::state::AuditState;
+
+#[allow(clippy::unwrap_used)]
+static ACTIONS_LABELER: LazyLock<ActionCoordinate> =
+    LazyLock::new(|| ActionCoordinate::NotConfigurable("actions/labeler".parse().unwrap()));
 
 pub(crate) struct DangerousTriggers;
 
@@ -19,24 +22,17 @@ audit_meta!(
 );
 
 impl DangerousTriggers {
-    fn is_labeler_exception(workflow: &Workflow) -> bool {
-        // If a workflow has exactly one job, that job has exactly one step,
-        // and that step is `actions/labeler`, then we suppress any
-        // finding for `pull_request_target`. Our rationale for this is
-        // that it's a blessed and presumed-secure use of an otherwise
-        // fundamentally insecure trigger.
-        if workflow.jobs.len() == 1
-            && let Some((_, Job::NormalJob(job))) = workflow.jobs.get_index(0)
-            && let [step] = job.steps.as_slice()
-            && let StepBody::Uses {
-                uses: Uses::Repository(uses),
-                ..
-            } = &step.body
-            && uses.matches("actions/labeler")
+    /// Tests whether the given workflow is (1) a single job, (2) that single job has a single
+    /// step, and (3) that single step matches the given action coordinate.
+    fn is_single_step_workflow(workflow: &Workflow, coord: &ActionCoordinate) -> bool {
+        if let Ok(Job::NormalJob(job)) = workflow.jobs().exactly_one()
+            && let Ok(step) = job.steps().exactly_one()
+            && coord.usage(&step).is_some()
         {
-            return true;
+            true
+        } else {
+            false
         }
-        false
     }
 }
 
@@ -49,35 +45,60 @@ impl Audit for DangerousTriggers {
     async fn audit_workflow<'doc>(
         &self,
         workflow: &'doc Workflow,
-        _config: &Config,
+        _group: &crate::registry::input::InputGroup,
     ) -> Result<Vec<Finding<'doc>>, AuditError> {
         let mut findings = vec![];
-        if workflow.has_pull_request_target() && !Self::is_labeler_exception(workflow) {
+
+        // Bug #2448: we dropped the entire `on:` span when we switched to more
+        // precise trigger spans, so users who had an ignore comment elsewhere in
+        // the `on:` block stopped getting suppressions.
+        let on_location = workflow.location().with_keys(["on".into()]);
+
+        // We don't flag `pull_request_target` if the only step in the workflow
+        // is `actions/labeler`, since it's a blessed first-party action and
+        // is presumed secure for this trigger.
+        if let Some(location) = workflow.pull_request_target()
+            && !Self::is_single_step_workflow(workflow, &ACTIONS_LABELER)
+        {
             findings.push(
                 Self::finding()
                     .confidence(Confidence::Medium)
                     .severity(Severity::High)
+                    .add_location(on_location.clone().hidden())
                     .add_location(
-                        workflow
-                            .location()
+                        location
                             .primary()
-                            .with_keys(["on".into()])
                             .annotated("pull_request_target is almost always used insecurely"),
                     )
                     .build(workflow)?,
             );
         }
-        if workflow.has_workflow_run() {
+
+        if let Some(location) = workflow.workflow_run() {
             findings.push(
                 Self::finding()
                     .confidence(Confidence::Medium)
                     .severity(Severity::High)
+                    .add_location(on_location.clone().hidden())
                     .add_location(
-                        workflow
-                            .location()
+                        location
                             .primary()
-                            .with_keys(["on".into()])
                             .annotated("workflow_run is almost always used insecurely"),
+                    )
+                    .build(workflow)?,
+            );
+        }
+
+        if let Some(location) = workflow.issue_comment() {
+            findings.push(
+                Self::finding()
+                    .confidence(Confidence::Medium)
+                    .severity(Severity::High)
+                    .add_location(on_location.clone().hidden())
+                    .add_location(
+                        location
+                            .primary()
+                            .annotated("issue_comment is almost always used insecurely"),
                     )
                     .build(workflow)?,
             );

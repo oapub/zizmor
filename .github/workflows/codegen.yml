@@ -22,27 +22,29 @@ jobs:
       pull-requests: write # for opening PRs
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v10.3.2
 
       - name: try to refresh schemas
         run: |
           make refresh-schemas
 
       - name: create PR
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: peter-evans/create-pull-request@v8.1.1
         with:
           draft: true
           commit-message: "[BOT] update JSON schemas from SchemaStore"
           branch: refresh-schemas
           branch-suffix: timestamp
-          title: "[BOT] update JSON schemas from SchemaStore"
+          title: "[BOT] update JSON schemas"
           body: |
             :robot: :warning: :robot:
 
             This is an automated pull request, updating the embedded JSON
-            schemas after a SchemaStore change was detected.
+            schemas after a change was detected.
 
             Please review manually before merging.
           assignees: ${{ env.PR_ASSIGNEES }}
@@ -59,18 +61,18 @@ jobs:
       pull-requests: write # for opening PRs
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: astral-sh/setup-uv@v10.3.2
 
       - name: try to refresh context capabilities
         run: |
           make webhooks-to-contexts
 
       - name: create PR
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: peter-evans/create-pull-request@v8.1.1
         with:
           draft: true
           commit-message: "[BOT] update context capabilities"
@@ -97,18 +99,18 @@ jobs:
       pull-requests: write # for opening PRs
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: astral-sh/setup-uv@v10.3.2
 
       - name: try to refresh CodeQL injection sinks
         run: |
           make codeql-injection-sinks
 
       - name: create PR
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: peter-evans/create-pull-request@v8.1.1
         with:
           draft: true
           commit-message: "[BOT] update CodeQL injection sinks"
@@ -136,18 +138,18 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: astral-sh/setup-uv@v10.3.2
 
       - name: try to refresh expression tests
         run: |
           make sync-expression-tests
 
       - name: create PR
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: peter-evans/create-pull-request@v8.1.1
         with:
           draft: true
           commit-message: "[BOT] update expression test data from GitHub"

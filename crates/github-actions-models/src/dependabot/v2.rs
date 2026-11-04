@@ -65,6 +65,11 @@ pub enum Registry {
         username: Option<String>,
         password: Option<String>,
     },
+    GoproxyServer {
+        url: String,
+        username: Option<String>,
+        password: Option<String>,
+    },
     HexOrganization {
         organization: String,
         key: Option<String>,
@@ -410,6 +415,8 @@ pub enum PackageEcosystem {
     Pub,
     /// `rust-toolchain`
     RustToolchain,
+    /// `sbt`
+    Sbt,
     /// `swift`
     Swift,
     /// `terraform`

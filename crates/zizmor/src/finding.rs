@@ -8,7 +8,7 @@ use std::fmt;
 use self::location::{Location, SymbolicLocation};
 use crate::{
     InputKey, audit::AuditError, finding::location::LocationKind, models::AsDocument,
-    registry::input::Group,
+    registry::input::GroupID,
 };
 use yamlpatch::{self, Patch};
 
@@ -76,10 +76,10 @@ pub(crate) struct Determinations {
 }
 
 /// Represents the "disposition" of a fix.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum FixDisposition {
     /// The fix is safe to apply automatically.
-    #[allow(dead_code)]
     Safe,
     /// The fix should be applied with manual oversight.
     #[default]
@@ -89,8 +89,8 @@ pub(crate) enum FixDisposition {
 impl fmt::Display for FixDisposition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            FixDisposition::Safe => write!(f, "safe"),
-            FixDisposition::Unsafe => write!(f, "unsafe"),
+            Self::Safe => write!(f, "safe"),
+            Self::Unsafe => write!(f, "unsafe"),
         }
     }
 }
@@ -101,7 +101,6 @@ impl fmt::Display for FixDisposition {
 /// and contains one or more [`Patch`] operations to apply to the input.
 pub(crate) struct Fix<'doc> {
     /// A short title describing the fix.
-    #[allow(dead_code)]
     pub(crate) title: String,
     /// The key back into the input registry that this fix applies to.
     pub(crate) key: &'doc InputKey,
@@ -177,7 +176,7 @@ impl Finding<'_> {
     ///
     /// We assume that all locations in a finding belong to the same group,
     /// if not the same file within that group.
-    pub(crate) fn input_group(&self) -> &Group {
+    pub(crate) fn input_group(&self) -> &GroupID {
         self.primary_location().symbolic.key.group()
     }
 }

@@ -1,10 +1,10 @@
-use crate::common::{input_under_test, zizmor};
 use anyhow::Result;
+use zizmor_dev::{WorkspaceBuilder, Zizmor, input_under_test};
 
 #[test]
 fn test_insecure_commands_auditor() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("insecure-commands.yml"))
             .args(["--persona=auditor"])
             .run()?,
@@ -37,7 +37,7 @@ fn test_insecure_commands_auditor() -> Result<()> {
 #[test]
 fn test_insecure_commands_default() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("insecure-commands.yml"))
             .run()?,
         @"
@@ -61,7 +61,7 @@ fn test_insecure_commands_default() -> Result<()> {
 #[test]
 fn test_action_auditor() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("insecure-commands/action.yml"))
             .args(["--persona=auditor"])
             .run()?,
@@ -104,7 +104,7 @@ fn test_action_auditor() -> Result<()> {
 #[test]
 fn test_issue_839_repro() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("insecure-commands/issue-839-repro.yml"))
             .args(["--persona=auditor"])
             .run()?,
@@ -129,6 +129,88 @@ fn test_issue_839_repro() -> Result<()> {
 
     2 findings (1 unsafe fixes): 0 informational, 0 low, 0 medium, 2 high
     "#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_fix_job_level() -> anyhow::Result<()> {
+    let workflow_content = r#"
+on: push
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+      OTHER_VAR: keep-me
+      ANOTHER_VAR: also-keep
+    steps:
+      - run: echo "test"
+"#;
+
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(".github/workflows/insecure-commands.yml", workflow_content);
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/insecure-commands.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .args(["--fix=all"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -5,7 +5,6 @@
+       test:
+         runs-on: ubuntu-latest
+         env:
+    -      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+           OTHER_VAR: keep-me
+           ANOTHER_VAR: also-keep
+         steps:
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_fix_workflow_level() -> anyhow::Result<()> {
+    let workflow_content = r#"
+on: push
+
+env:
+  ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+  GLOBAL_VAR: keep-me
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "test"
+"#;
+
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(".github/workflows/insecure-commands.yml", workflow_content);
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/insecure-commands.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .args(["--fix=all"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -2,7 +2,6 @@
+     on: push
+     ⏎
+     env:
+    -  ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+       GLOBAL_VAR: keep-me
+     ⏎
+     jobs:
+    "
     );
 
     Ok(())

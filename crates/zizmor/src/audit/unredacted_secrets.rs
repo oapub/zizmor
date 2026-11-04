@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::ops::Deref as _;
 
 use github_actions_expressions::{
     Expr, SpannedExpr,
@@ -36,9 +36,13 @@ impl Audit for UnredactedSecrets {
     async fn audit_raw<'doc>(
         &self,
         input: &'doc super::AuditInput,
-        _config: &crate::config::Config,
+        _group: &crate::registry::input::InputGroup,
     ) -> Result<Vec<crate::finding::Finding<'doc>>, AuditError> {
         let mut findings = vec![];
+
+        if !input.supports_gha_template_syntax() {
+            return Ok(findings);
+        }
 
         for (expr, span) in parse_fenced_expressions_from_routable(input) {
             let Ok(parsed) = Expr::parse(expr.as_bare()) else {
@@ -90,7 +94,7 @@ impl UnredactedSecrets {
                 }
             }
             Expr::Index(expr) => results.extend(Self::secret_leakages(expr)),
-            Expr::Context(Context { parts, .. }) => {
+            Expr::Context(Context { parts }) => {
                 results.extend(parts.iter().flat_map(Self::secret_leakages))
             }
             Expr::BinExpr(BinExpr { lhs, op: _, rhs }) => {

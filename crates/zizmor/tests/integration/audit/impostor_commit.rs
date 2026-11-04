@@ -1,12 +1,12 @@
-use crate::common::{input_under_test, zizmor};
+use zizmor_dev::{NetworkMode, Zizmor, input_under_test};
 
 #[cfg_attr(not(feature = "gh-token-tests"), ignore)]
 #[test]
 fn test_regular_persona() -> anyhow::Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("impostor-commit.yml"))
-            .offline(false)
+            .offline(NetworkMode::AssertOnline)
             .run()?,
         @"
     error[impostor-commit]: commit with no history in referenced repository
@@ -36,11 +36,37 @@ fn test_regular_persona() -> anyhow::Result<()> {
 #[test]
 fn test_peels_tag_sha_to_commit_sha() -> anyhow::Result<()> {
     insta::assert_snapshot!(
-    zizmor()
+    Zizmor::cargo_bin()
         .input(input_under_test("impostor-commit/sha-is-tag.yml"))
-        .offline(false)
+        .offline(NetworkMode::AssertOnline)
         .run()?,
     @"No findings to report. Good job! (3 suppressed)"
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(not(feature = "gh-token-tests"), ignore)]
+#[test]
+fn test_pre_commit() -> anyhow::Result<()> {
+    insta::assert_snapshot!(
+    Zizmor::cargo_bin()
+        .input(input_under_test("impostor-commit/.pre-commit-config.yaml"))
+        .offline(NetworkMode::AssertOnline)
+        .run()?,
+    @"
+    error[impostor-commit]: commit with no history in referenced repository
+     --> @@INPUT@@:4:5
+      |
+    3 |   - repo: https://github.com/actions/checkout
+      |     ----------------------------------------- this repo
+    4 |     rev: c7d749a2d57b4b375d1ebcd17cfbfb60c676f18e
+      |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ uses a commit that doesn't belong to the specified org/repo
+      |
+      = note: audit confidence → High
+
+    1 finding: 0 informational, 0 low, 0 medium, 1 high
+    "
     );
 
     Ok(())

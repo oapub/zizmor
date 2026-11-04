@@ -23,7 +23,8 @@ typically named `zizmor.yml` or `zizmor.yaml`.
 !!! tip
 
     `zizmor`'s configuration discovery behavior changed significantly
-    in `v1.13.0`. See the [release notes](./release-notes.md) for details.
+    in `v1.13.0` and again in `v1.29.0`. See the
+    [release notes](./release-notes.md) for details.
 
 `zizmor` discovers configuration files in two conceptually distinct ways:
 
@@ -37,40 +38,73 @@ typically named `zizmor.yml` or `zizmor.yaml`.
 2. **Local** discovery: when no global configuration file is given, `zizmor`
     looks for configuration files _for each given input_. The rules for this
     discovery are as follows:
-    - File inputs (e.g. `zizmor path/to/workflow.yml`): `zizmor` performs
-      directory discovery starting in the directory containing the given file.
-
-    - Directory inputs (e.g. `zizmor .`): `zizmor` looks for a `zizmor.yml`
-      or `zizmor.yaml` file in the given directory, the `.github` child directory,
-      or any parent, up to the filesystem root or the first `.git` directory.
-
-        !!! example
-
-            Given an invocation like `zizmor ./repo/`, `zizmor` will attempt
-            to discover configuration files in the following order:
-
-            1. `./repo/.github/zizmor.yml`
-            2. `./repo/.github/zizmor.yaml`
-            3. `./repo/zizmor.yml`
-            4. `./repo/zizmor.yaml`
-            5. `./repo/../.github/zizmor.yml`
-            6. `./repo/../.github/zizmor.yaml`
-            7. ...and so on, until the filesystem root or a `.git/` directory is found.
+    - If the input is within a Git repository, `zizmor` performs directory
+      discovery starting (and ending) at the repository root.
 
         !!! note
 
-            `zizmor .github/workflows/` is a special case: in this case,
-            discovery starts in `.github/`, the parent of the given directory.
+            As of `v1.32.0`, `zizmor` honors Git submodule and worktree roots.
 
-            This is done to avoid confusion between a `zizmor.yml` config
-            file and a `zizmor.yml` workflow file.
+            In other words, if you run `zizmor ./my-repo/submodule`,
+            `zizmor` will discover configuration relative to `./my-repo/submodule`
+            rather than `./my-repo`.
+
+        !!! example
+
+            Given an invocation like `zizmor ./repo/foo/action.yml`,
+            `zizmor` will attempt to discover configuration files in
+            the following order:
+
+            1. `./repo/.github/zizmor.yml`
+            1. `./repo/.github/zizmor.yaml`
+            1. `./repo/zizmor.yml`
+            1. `./repo/zizmor.yaml`
+
+    - If the input is **not** within a Git repository, the following rules
+      apply:
+
+        - File inputs (e.g. `zizmor path/to/workflow.yml`): `zizmor` performs
+          directory discovery starting in the directory containing the given file.
+
+        - Directory inputs (e.g. `zizmor .`): `zizmor` looks for a `zizmor.yml`
+          or `zizmor.yaml` file in the given directory, the `.github` child directory,
+          or any parent, up to the filesystem root or the first `.git` directory.
+
+            !!! example
+
+                Given an invocation like `zizmor ./dir/`, `zizmor` will attempt
+                to discover configuration files in the following order:
+
+                1. `./dir/.github/zizmor.yml`
+                2. `./dir/.github/zizmor.yaml`
+                3. `./dir/zizmor.yml`
+                4. `./dir/zizmor.yaml`
+                5. `./dir/../.github/zizmor.yml`
+                6. `./dir/../.github/zizmor.yaml`
+                7. ...and so on, until the filesystem root or a `.git/` directory is found.
+
+            !!! note
+
+                `zizmor .github/workflows/` is a special case: in this case,
+                discovery starts in the parent of `.github`, i.e. two parents
+                above the given directory.
+
+                This is done to avoid confusion between a `zizmor.yml` config
+                file and a `zizmor.yml` workflow file.
 
     - Remote repository inputs (e.g. `zizmor owner/repo`): `zizmor` looks for
-      a `zizmor.yml` or `.github/zizmor.yml` in the root of the repository.
+      `.github/zizmor.ya?ml` or `zizmor.ya?ml` in the root of the repository.
 
 In general, **most users will want to use local discovery**, which is the
 default behavior. Global discovery only takes precedence when explicitly
 requested with `--config` or `ZIZMOR_CONFIG`.
+
+## JSON Schema
+
+A JSON Schema for `zizmor` can be found [here](https://raw.githubusercontent.com/woodruffw/zizmor/main/support/zizmor.schema.json).
+
+[SchemaStore](https://www.schemastore.org) also provides access to `zizmor`'s JSON Schema,
+meaning that any IDE that integrates with SchemaStore should obtain it automatically.
 
 ## Settings
 
@@ -93,7 +127,7 @@ Disables the audit entirely if `true`.
     Before disabling an audit entirely, consider one of the following
     alternatives:
 
-    1. Ignoring specific findings via [`rules.<id>.ignore`](#rulesidignore).
+    1. Ignoring specific findings via [`rules.<id>.ignore`](#rules-id-ignore).
     1. Changing your [persona](./usage.md#using-personas) to a less sensitive
        one. For example, consider removing `--persona=pedantic`
        or `--persona=auditor` if you're using one of those.

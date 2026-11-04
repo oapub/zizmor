@@ -1,10 +1,10 @@
-use crate::common::{input_under_test, zizmor};
 use anyhow::Result;
+use zizmor_dev::{WorkspaceBuilder, Zizmor, input_under_test};
 
 #[test]
 fn test_obfuscation() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("obfuscation.yml"))
             .run()?,
         @"
@@ -205,7 +205,7 @@ fn test_obfuscation() -> Result<()> {
 #[test]
 fn test_computed_indices_pedantic() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("obfuscation/computed-indices.yml"))
             .args(["--persona=pedantic"])
             .run()?,
@@ -228,7 +228,7 @@ fn test_computed_indices_pedantic() -> Result<()> {
 #[test]
 fn test_issue_1177_repro_pedantic() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("obfuscation/issue-1177-repro.yml"))
             .args(["--persona=pedantic"])
             .run()?,
@@ -241,20 +241,229 @@ fn test_issue_1177_repro_pedantic() -> Result<()> {
 #[test]
 fn test_issue_1769() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
         .input(input_under_test("obfuscation/issue-1769-repro.yml")).run()?,
         @"
     info[obfuscation]: obfuscated usage of GitHub Actions features
       --> @@INPUT@@:19:9
        |
-    18 |       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # zizmor: ignore[artipacked]
+    18 |       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
        |         --------------------------------------------------------------- this action
     19 |         with: ${{ fromJson(steps.setup.outputs.options) }}
        |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of an expression for `with:` prevents analysis
        |
        = note: audit confidence → High
 
-    2 findings (1 suppressed): 1 informational, 0 low, 0 medium, 0 high
+    1 finding: 1 informational, 0 low, 0 medium, 0 high
+    "
+    );
+
+    Ok(())
+}
+
+/// Bug #2464: we should not flag expressions that would expand to other expressions
+/// (or fragments thereof) as obfuscation findings.
+#[test]
+fn test_issue_2464() -> Result<()> {
+    insta::assert_snapshot!(
+        Zizmor::cargo_bin()
+        .input(input_under_test("obfuscation/issue-2464-repro.yml")).run()?,
+        @"No findings to report. Good job! (2 suppressed)"
+    );
+
+    Ok(())
+}
+
+/// Test that we correctly replace `${{ 'foo' }}` with `foo` instead of `${{ foo }}`.
+///
+/// Reproducer for #1578; see: <https://github.com/zizmorcore/zizmor/issues/1578>.
+#[test]
+fn test_fix_static_evaluation() -> anyhow::Result<()> {
+    let workflow_content = r#"
+name: Test Workflow
+on: push
+
+permissions: {}
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0 # ... because release-please scans historical commits to build releases, so we need all the history.
+          persist-credentials: false
+      - id: release
+        uses: $/vendor/github.com/googleapis/release-please-action
+        with:
+          config-file: "tools/releasing/config.release-please.json"
+          manifest-file: "tools/releasing/manifest.release-please.json"
+          target-branch: "${{ inputs.rp_target_branch }}"
+    outputs:
+      iac/terraform/attribution.tfm--release_created: ${{ 'steps.release.outputs.iac/terraform/attribution.tfm--release_created' }}
+"#;
+
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(".github/workflows/test.yml", workflow_content);
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/test.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .args(["--fix=safe"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @r#"
+    @@ -19,4 +19,4 @@
+               manifest-file: "tools/releasing/manifest.release-please.json"
+               target-branch: "${{ inputs.rp_target_branch }}"
+         outputs:
+    -      iac/terraform/attribution.tfm--release_created: ${{ 'steps.release.outputs.iac/terraform/attribution.tfm--release_created' }}
+    +      iac/terraform/attribution.tfm--release_created: steps.release.outputs.iac/terraform/attribution.tfm--release_created
+    "#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_fix_multiple_subexpressions() -> Result<()> {
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(
+        ".github/workflows/test.yml",
+        r#"name: Test Workflow
+on: push
+permissions: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ${{ format('{0} {1} {2}', github.run_id, format('{0}', 'abc'), format('{0}', 'abc')) }}
+"#,
+    );
+
+    insta::assert_snapshot!(
+        workspace.diff(".github/workflows/test.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .args(["--fix=safe"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @r#"
+    @@ -5,4 +5,4 @@
+       test:
+         runs-on: ubuntu-latest
+         steps:
+    -      - run: echo ${{ format('{0} {1} {2}', github.run_id, format('{0}', 'abc'), format('{0}', 'abc')) }}
+    +      - run: echo ${{ format('{0} {1} {2}', github.run_id, 'abc', 'abc') }}
+    "#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_fix_uses_path_empty_components() -> anyhow::Result<()> {
+    let workflow_content = r#"
+name: Test Workflow
+on: push
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout////@v4
+"#;
+
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(".github/workflows/test.yml", workflow_content);
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/test.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .args(["--fix=safe"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -6,4 +6,4 @@
+       test:
+         runs-on: ubuntu-latest
+         steps:
+    -      - uses: actions/checkout////@v4
+    +      - uses: actions/checkout@v4
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_fix_uses_path_dot() -> anyhow::Result<()> {
+    let workflow_content = r#"
+name: Test Workflow
+on: push
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/./init@v2
+"#;
+
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(".github/workflows/test.yml", workflow_content);
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/test.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .args(["--fix=safe"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -6,4 +6,4 @@
+       test:
+         runs-on: ubuntu-latest
+         steps:
+    -      - uses: github/codeql-action/./init@v2
+    +      - uses: github/codeql-action/init@v2
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_fix_uses_path_double_dot() -> anyhow::Result<()> {
+    let workflow_content = r#"
+name: Test Workflow
+on: push
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/cache/save/../save@v4
+"#;
+
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(".github/workflows/test.yml", workflow_content);
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/test.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .args(["--fix=safe"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -6,4 +6,4 @@
+       test:
+         runs-on: ubuntu-latest
+         steps:
+    -      - uses: actions/cache/save/../save@v4
+    +      - uses: actions/cache/save@v4
     "
     );
 

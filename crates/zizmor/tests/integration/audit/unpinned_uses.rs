@@ -1,10 +1,10 @@
-use crate::common::{input_under_test, zizmor};
 use anyhow::Result;
+use zizmor_dev::{Zizmor, input_under_test};
 
 #[test]
 fn test_unpinned_uses_pedantic() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("unpinned-uses.yml"))
             .args(["--pedantic"])
             .run()?,
@@ -17,23 +17,7 @@ fn test_unpinned_uses_pedantic() -> Result<()> {
        |
        = note: audit confidence → High
 
-    warning[unpinned-uses]: unpinned action reference
-      --> @@INPUT@@:21:24
-       |
-    21 |       - uses: docker://ubuntu
-       |                        ^^^^^^ image is not pinned to a tag, branch, or hash ref
-       |
-       = note: audit confidence → High
-
-    warning[unpinned-uses]: unpinned action reference
-      --> @@INPUT@@:27:24
-       |
-    27 |       - uses: docker://ghcr.io/pypa/gh-action-pypi-publish
-       |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ image is not pinned to a tag, branch, or hash ref
-       |
-       = note: audit confidence → High
-
-    3 findings: 0 informational, 0 low, 2 medium, 1 high
+    1 finding: 0 informational, 0 low, 0 medium, 1 high
     "
     );
 
@@ -43,7 +27,7 @@ fn test_unpinned_uses_pedantic() -> Result<()> {
 #[test]
 fn test_unpinned_uses_default() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("unpinned-uses.yml"))
             .run()?,
         @"
@@ -55,23 +39,7 @@ fn test_unpinned_uses_default() -> Result<()> {
        |
        = note: audit confidence → High
 
-    warning[unpinned-uses]: unpinned action reference
-      --> @@INPUT@@:21:24
-       |
-    21 |       - uses: docker://ubuntu
-       |                        ^^^^^^ image is not pinned to a tag, branch, or hash ref
-       |
-       = note: audit confidence → High
-
-    warning[unpinned-uses]: unpinned action reference
-      --> @@INPUT@@:27:24
-       |
-    27 |       - uses: docker://ghcr.io/pypa/gh-action-pypi-publish
-       |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ image is not pinned to a tag, branch, or hash ref
-       |
-       = note: audit confidence → High
-
-    3 findings: 0 informational, 0 low, 2 medium, 1 high
+    1 finding: 0 informational, 0 low, 0 medium, 1 high
     "
     );
 
@@ -81,7 +49,7 @@ fn test_unpinned_uses_default() -> Result<()> {
 #[test]
 fn test_action_pedantic() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("unpinned-uses/action.yml"))
             .args(["--pedantic"])
             .run()?,
@@ -112,7 +80,7 @@ fn test_action_pedantic() -> Result<()> {
 #[test]
 fn test_issue_433_repro() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("unpinned-uses/issue-433-repro.yml"))
             .args(["--pedantic"])
             .run()?,
@@ -126,7 +94,7 @@ fn test_issue_433_repro() -> Result<()> {
 #[test]
 fn test_issue_659_repro() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("unpinned-uses/issue-659-repro.yml"))
             .args(["--pedantic"])
             .run()?,
@@ -152,7 +120,7 @@ fn test_issue_659_repro() -> Result<()> {
 #[test]
 fn test_issue_1543_repro() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("unpinned-uses/issue-1543-repro.yml"))
             .run()?,
         @"
@@ -175,7 +143,7 @@ fn test_issue_1543_repro() -> Result<()> {
 #[test]
 fn test_default_config() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("unpinned-uses/menagerie-of-uses.yml"))
             .run()?,
         @"
@@ -230,7 +198,7 @@ fn test_default_config() -> Result<()> {
 #[test]
 fn test_hash_pin_everything_config() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .config(input_under_test(
                 "unpinned-uses/configs/hash-pin-everything.yml"
             ))
@@ -288,7 +256,7 @@ fn test_hash_pin_everything_config() -> Result<()> {
 #[test]
 fn test_ref_pin_everything_config() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .config(input_under_test(
                 "unpinned-uses/configs/ref-pin-everything.yml"
             ))
@@ -303,7 +271,7 @@ fn test_ref_pin_everything_config() -> Result<()> {
 #[test]
 fn test_composite_config() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .config(input_under_test("unpinned-uses/configs/composite.yml"))
             .input(input_under_test("unpinned-uses/menagerie-of-uses.yml"))
             .run()?,
@@ -342,7 +310,7 @@ fn test_composite_config() -> Result<()> {
 #[test]
 fn test_composite_config_2() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .config(input_under_test("unpinned-uses/configs/composite-2.yml"))
             .input(input_under_test("unpinned-uses/menagerie-of-uses.yml"))
             .run()?,
@@ -373,7 +341,7 @@ fn test_composite_config_2() -> Result<()> {
 #[test]
 fn test_empty_config() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .config(input_under_test("unpinned-uses/configs/empty.yml"))
             .input(input_under_test("unpinned-uses/menagerie-of-uses.yml"))
             .run()?,
@@ -428,7 +396,7 @@ fn test_empty_config() -> Result<()> {
 #[test]
 fn test_invalid_wrong_policy_object() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .expects_failure(1)
             .config(input_under_test(
                 "unpinned-uses/configs/invalid-wrong-policy-object.yml"
@@ -456,7 +424,7 @@ fn test_invalid_wrong_policy_object() -> Result<()> {
 #[test]
 fn test_invalid_policy_syntax_1() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .expects_failure(1)
             .config(input_under_test(
                 "unpinned-uses/configs/invalid-policy-syntax-1.yml"
@@ -484,7 +452,7 @@ fn test_invalid_policy_syntax_1() -> Result<()> {
 #[test]
 fn test_invalid_policy_syntax_2() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .expects_failure(1)
             .config(input_under_test(
                 "unpinned-uses/configs/invalid-policy-syntax-2.yml"
@@ -512,7 +480,7 @@ fn test_invalid_policy_syntax_2() -> Result<()> {
 #[test]
 fn test_invalid_policy_syntax_3() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .expects_failure(1)
             .config(input_under_test(
                 "unpinned-uses/configs/invalid-policy-syntax-3.yml"
@@ -540,7 +508,7 @@ fn test_invalid_policy_syntax_3() -> Result<()> {
 #[test]
 fn test_invalid_policy_syntax_4() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .expects_failure(1)
             .config(input_under_test(
                 "unpinned-uses/configs/invalid-policy-syntax-4.yml"
@@ -568,7 +536,7 @@ fn test_invalid_policy_syntax_4() -> Result<()> {
 #[test]
 fn test_invalid_policy_syntax_5() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .expects_failure(1)
             .config(input_under_test(
                 "unpinned-uses/configs/invalid-policy-syntax-5.yml"
@@ -596,7 +564,7 @@ fn test_invalid_policy_syntax_5() -> Result<()> {
 #[test]
 fn test_invalid_policy_syntax_6() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .expects_failure(1)
             .config(input_under_test(
                 "unpinned-uses/configs/invalid-policy-syntax-6.yml"
@@ -621,7 +589,7 @@ fn test_invalid_policy_syntax_6() -> Result<()> {
 #[test]
 fn test_reusable_workflow_unpinned() -> Result<()> {
     insta::assert_snapshot!(
-        zizmor()
+        Zizmor::cargo_bin()
             .input(input_under_test("unpinned-uses/reusable-workflow-unpinned.yml"))
             .run()?,
         @"
@@ -641,7 +609,331 @@ fn test_reusable_workflow_unpinned() -> Result<()> {
        |
        = note: audit confidence → High
 
-    2 findings: 0 informational, 0 low, 0 medium, 2 high
+    help[self-repository]: use GitHub's dedicated self-repository syntax
+      --> @@INPUT@@:13:11
+       |
+    12 |   local-workflow:
+       |   -------------- this job
+    13 |     uses: ./.github/workflows/local.yml
+       |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use '$/...' instead of './...'
+       |
+       = note: audit confidence → High
+       = note: this finding has an auto-fix
+
+    3 findings (1 unsafe fixes): 0 informational, 1 low, 0 medium, 2 high
+    "
+    );
+
+    Ok(())
+}
+
+/// The `unpinned-uses` audit should honor a lockfile and not flag `uses:` clauses
+/// that are locked through it, even if they aren't hash-pinned inline.
+#[cfg(feature = "gh-token-tests")]
+#[test]
+fn test_honors_lockfile() -> anyhow::Result<()> {
+    use zizmor_dev::NetworkMode;
+
+    insta::assert_snapshot!(
+    Zizmor::cargo_bin()
+        .offline(NetworkMode::AssertOnline)
+        .input("woodruffw-experiments/actions-lockfile-experiments@155d4cc")
+        .run()?,
+    @"No findings to report. Good job!"
+    );
+
+    // Passing `--ignore-lockfile` brings the unpinned-uses findings back.
+    insta::assert_snapshot!(
+    Zizmor::cargo_bin()
+        .offline(NetworkMode::AssertOnline)
+        .input("woodruffw-experiments/actions-lockfile-experiments@155d4cc")
+        .args(["--ignore-lockfile"])
+        .run()?,
+    @"
+    error[unpinned-uses]: unpinned action reference
+      --> .github/workflows/neutral.yml:18:15
+       |
+    18 |       - uses: actions/checkout@v7.0.1
+       |               ^^^^^^^^^^^^^^^^^^^^^^^ action is not pinned to a hash (required by blanket policy)
+       |
+       = note: audit confidence → High
+       = note: this finding has an auto-fix
+
+    1 finding: 0 informational, 0 low, 0 medium, 1 high
+    "
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "gh-token-tests")]
+#[test]
+fn test_fix() -> anyhow::Result<()> {
+    use zizmor_dev::{NetworkMode, WorkspaceBuilder};
+
+    let workflow_content = r#"
+name: Test
+on: push
+permissions: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with ref-pin
+        uses: actions/checkout@v6.0.1
+        with:
+          persist-credentials: false
+"#;
+
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(".github/workflows/test.yml", &workflow_content);
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/test.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .offline(NetworkMode::AssertOnline)
+                .output(zizmor_dev::OutputMode::Both)
+                .args(["--fix=all"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -7,6 +7,6 @@
+         runs-on: ubuntu-latest
+         steps:
+           - name: Checkout with ref-pin
+    -        uses: actions/checkout@v6.0.1
+    +        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+             with:
+               persist-credentials: false
+    "
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "gh-token-tests")]
+#[test]
+fn test_fix_crlf() -> anyhow::Result<()> {
+    use zizmor_dev::{NetworkMode, WorkspaceBuilder};
+
+    let workflow_content = r#"
+name: Test
+on: push
+permissions: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with ref-pin
+        uses: actions/checkout@v6.0.1
+        with:
+          persist-credentials: false
+"#
+    .replace("\n", "\r\n");
+
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(".github/workflows/test.yml", &workflow_content);
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/test.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .offline(NetworkMode::AssertOnline)
+                .output(zizmor_dev::OutputMode::Both)
+                .args(["--fix=all"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -7,6 +7,6 @@
+         runs-on: ubuntu-latest
+         steps:
+           - name: Checkout with ref-pin
+    -        uses: actions/checkout@v6.0.1
+    +        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+             with:
+               persist-credentials: false
+    "
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "gh-token-tests")]
+#[test]
+fn test_fix_overwrites_comment() -> anyhow::Result<()> {
+    use zizmor_dev::{NetworkMode, WorkspaceBuilder};
+
+    let workflow_content = r#"
+name: Test
+on: push
+permissions: {}
+jobs:
+    test:
+        runs-on: ubuntu-latest
+        steps:
+        - name: Checkout with ref-pin
+          uses: actions/checkout@v6.0.1 # old comment
+          with:
+            persist-credentials: false
+"#;
+
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(".github/workflows/test.yml", &workflow_content);
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/test.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .offline(NetworkMode::AssertOnline)
+                .output(zizmor_dev::OutputMode::Both)
+                .args(["--fix=all"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -7,6 +7,6 @@
+             runs-on: ubuntu-latest
+             steps:
+             - name: Checkout with ref-pin
+    -          uses: actions/checkout@v6.0.1 # old comment
+    +          uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+               with:
+                 persist-credentials: false
+    "
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "gh-token-tests")]
+#[test]
+fn test_fix_bizarre_formatting() -> anyhow::Result<()> {
+    use zizmor_dev::{NetworkMode, WorkspaceBuilder};
+
+    let workflow_content = r#"
+name: Test
+on: push
+permissions: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        uses: actions/checkout@v6.0.1
+        with:
+          persist-credentials: false
+"#;
+
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(".github/workflows/test.yml", &workflow_content);
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/test.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .offline(NetworkMode::AssertOnline)
+                .output(zizmor_dev::OutputMode::Both)
+                .args(["--fix=all"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -7,6 +7,6 @@
+         runs-on: ubuntu-latest
+         steps:
+           -
+    -        uses: actions/checkout@v6.0.1
+    +        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+             with:
+               persist-credentials: false
+    "
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "gh-token-tests")]
+#[test]
+fn test_fix_preserves_subpath() -> anyhow::Result<()> {
+    use zizmor_dev::{NetworkMode, WorkspaceBuilder};
+
+    let workflow_content = r#"
+name: Test
+on: push
+permissions: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: bytecodealliance/actions/wasmtime/setup@v1.1.3
+"#;
+
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(".github/workflows/test.yml", &workflow_content);
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/test.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .offline(NetworkMode::AssertOnline)
+                .output(zizmor_dev::OutputMode::Both)
+                .args(["--fix=all"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -6,4 +6,4 @@
+       test:
+         runs-on: ubuntu-latest
+         steps:
+    -      - uses: bytecodealliance/actions/wasmtime/setup@v1.1.3
+    +      - uses: bytecodealliance/actions/wasmtime/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3
+    "
+    );
+
+    Ok(())
+}
+
+/// Tests that we expand a major version ref like `@v1` to the full version `v1.2.0`
+/// in the fix's inserted comment.
+#[cfg(feature = "gh-token-tests")]
+#[test]
+fn test_fix_major_version_pins_to_full_version() -> anyhow::Result<()> {
+    use zizmor_dev::{NetworkMode, WorkspaceBuilder};
+
+    let workflow_content = r#"
+name: Test
+on: push
+permissions: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with major-only ref
+        uses: actions/checkout@v1
+        with:
+          persist-credentials: false
+"#;
+
+    let workspace = WorkspaceBuilder::default().is_git_repo(true).build()?;
+    workspace.add_file(".github/workflows/test.yml", &workflow_content);
+
+    insta::assert_snapshot!(
+        &workspace.diff(".github/workflows/test.yml", |workspace| {
+            Zizmor::cargo_bin()
+                .offline(NetworkMode::AssertOnline)
+                .output(zizmor_dev::OutputMode::Both)
+                .args(["--fix=all"])
+                .input(workspace.path())
+                .run()
+        })?,
+        @"
+    @@ -7,6 +7,6 @@
+         runs-on: ubuntu-latest
+         steps:
+           - name: Checkout with major-only ref
+    -        uses: actions/checkout@v1
+    +        uses: actions/checkout@50fbc622fc4ef5163becd7fab6573eac35f8462e # v1.2.0
+             with:
+               persist-credentials: false
     "
     );
 

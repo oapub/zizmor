@@ -33,12 +33,12 @@ jobs:
       actions: read          # Only needed for private repos. Needed for upload-sarif to read workflow run info.
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Run zizmor 🌈
-        uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d # v0.5.6
+        uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
 ```
 
 See the action's [`inputs` documentation][inputs-documentation] for
@@ -82,11 +82,14 @@ GitHub Actions setup:
       pull_request:
         branches: ["**"]
 
+    env:
+      ZIZMOR_VERSION: 1.32.0
+
     permissions: {}
 
     jobs:
       zizmor:
-        name: zizmor latest via PyPI
+        name: zizmor via PyPI
         runs-on: ubuntu-latest
         permissions:
           security-events: write # Required for upload-sarif (used by zizmor-action) to upload SARIF files.
@@ -94,20 +97,20 @@ GitHub Actions setup:
           actions: read          # Only needed for private repos. Needed for upload-sarif to read workflow run info.
         steps:
           - name: Checkout repository
-            uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             with:
               persist-credentials: false
 
           - name: Install the latest version of uv
-            uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+            uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
           - name: Run zizmor 🌈
-            run: uvx zizmor --format=sarif . > results.sarif # (2)!
+            run: uvx "zizmor@${ZIZMOR_VERSION}" --format=sarif . > results.sarif # (2)!
             env:
               GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # (1)!
 
           - name: Upload SARIF file
-            uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+            uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
             with:
               sarif_file: results.sarif
               category: zizmor
@@ -115,9 +118,8 @@ GitHub Actions setup:
 
     1. Optional: Remove the `env:` block to only run `zizmor`'s offline audits.
 
-    2. This installs the [zizmor package from PyPI], since it's pre-compiled
-       and therefore completes much faster. You could instead compile `zizmor`
-       within CI/CD with `cargo install zizmor`.
+    2. This installs a pinned [zizmor package from PyPI], since it's
+       pre-compiled and therefore completes much faster.
 
     For more inspiration, see `zizmor`'s own [repository workflow scan], as well
     as GitHub's example of [running ESLint] as a security workflow.
@@ -156,32 +158,34 @@ GitHub Actions setup:
       pull_request:
         branches: ["**"]
 
+    env:
+      ZIZMOR_VERSION: 1.32.0
+
     jobs:
       zizmor:
-        name: zizmor latest via PyPI
+        name: zizmor via PyPI
         runs-on: ubuntu-latest
         permissions:
           contents: read # Only needed for private repos. Needed to clone the repo.
         steps:
           - name: Checkout repository
-            uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+            uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             with:
               persist-credentials: false
 
           - name: Install the latest version of uv
-            uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+            uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
           - name: Run zizmor 🌈
-            run: uvx zizmor --format=github . # (2)!
+            run: uvx "zizmor@${ZIZMOR_VERSION}" --format=github . # (2)!
             env:
               GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # (1)!
     ```
 
     1. Optional: Remove the `env:` block to only run `zizmor`'s offline audits.
 
-    2. This installs the [zizmor package from PyPI], since it's pre-compiled
-       and therefore completes much faster. You could instead compile `zizmor`
-       within CI/CD with `cargo install zizmor`.
+    2. This installs a pinned [zizmor package from PyPI], since it's
+       pre-compiled and therefore completes much faster.
 
     !!! warning
 
@@ -226,11 +230,24 @@ GitHub Actions setup:
 `zizmor` can be integrated directly into your IDE or editor of choice,
 giving you real-time feedback on your workflows and action definitions.
 
+### Zed
+
+`zizmor` has an official extension for Zed!
+
+You can install it from the [Zed Marketplace](https://zed.dev/extensions/zizmor).
+
+The extension does *not* come with `zizmor` itself, so you will need to
+[separately install](./installation.md) `zizmor` in order for the extension
+to work.
+
+See @zizmorcore/zizmor-zed for more information.
+
 ### Visual Studio Code
 
 `zizmor` has an official extension for Visual Studio Code!
 
 You can install it from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=zizmor.zizmor-vscode).
+
 The extension does *not* come with `zizmor` itself, so you will need to
 [separately install](./installation.md) `zizmor` in order for the extension
 to work.
@@ -252,6 +269,28 @@ vim.lsp.enable('zizmor')
 ```
 
 For more information about LSP configuration in neovim, see `:h lspconfig-all`.
+
+### Sublime Text
+
+Support for `zizmor` in Sublime Text is provided via the
+[LSP](https://lsp.sublimetext.io/) package. As with Visual
+Studio Code, you must install `zizmor` [separately](./installation.md) for the
+LSP server to work.
+
+Install [LSP](https://packages.sublimetext.com/packages/LSP)
+and [YamlPipelines](https://packages.sublimetext.com/packages/YamlPipelines)
+packages using Package Control. Then, enable `zizmor` LSP by adding the following
+configuration in `Preferences > Package Settings > LSP > Server Configurations`:
+
+```json
+{
+    "zizmor": {
+        "enabled": true,
+        "command": ["zizmor", "--lsp"],
+        "selector": "source.yaml.pipeline.github-actions"
+    }
+}
+```
 
 ### Generic LSP integration
 
@@ -275,7 +314,7 @@ To do so, add the following to your `.pre-commit-config.yaml` `#!yaml repos:` se
 
 ```yaml
 - repo: https://github.com/zizmorcore/zizmor-pre-commit
-  rev: v1.22.0 # (1)!
+  rev: v1.30.1 # (1)!
   hooks:
   - id: zizmor
 ```
@@ -337,14 +376,50 @@ shells. It supports all of the shells supported by
 [`clap_complete`](https://crates.io/crates/clap_complete),
 which includes popular shells like `bash`, `zsh`, and `fish`.
 
-To enable tab completion, you can use the `--completions=<shell>` flag
-to emit a completion script for the specified shell. For example,
-to enable tab completion for `bash`, you can run:
+!!! tip
 
-```bash
-zizmor --completions=bash > ~/.bash_completion.d/zizmor # (1)!
-```
+    You can run `echo $SHELL` to help you determine your shell.
 
-1. The correct location of your completion script will depend on your
-   shell and its configuration. Consult your shell's documentation
-   for more information.
+To enable shell autocompletion for zizmor, run one of the following:
+
+=== "Bash"
+
+    ```bash
+    echo 'eval "$(zizmor --completions bash)"' >> ~/.bashrc
+    ```
+
+=== "Zsh"
+
+    ```bash
+    echo 'eval "$(zizmor --completions zsh)"' >> ~/.zshrc
+    ```
+
+=== "fish"
+
+    ```bash
+    echo 'zizmor --completions fish | source' > ~/.config/fish/completions/zizmor.fish
+    ```
+
+=== "Elvish"
+
+    ```bash
+    echo 'eval (zizmor --completions elvish | slurp)' >> ~/.elvish/rc.elv
+    ```
+
+=== "PowerShell / pwsh"
+
+    ```powershell
+    if (!(Test-Path -Path $PROFILE)) {
+      New-Item -ItemType File -Path $PROFILE -Force
+    }
+    Add-Content -Path $PROFILE -Value '(& zizmor --completions powershell) | Out-String | Invoke-Expression'
+    ```
+
+=== "Nushell"
+
+    ```nu
+    mkdir ($nu.user-autoload-dirs | first)
+    zizmor --completions nushell | save --force ($nu.user-autoload-dirs | first | path join zizmor.nu)
+    ```
+
+Then restart your shell or source your shell configuration file.

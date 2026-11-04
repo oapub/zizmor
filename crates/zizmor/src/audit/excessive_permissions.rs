@@ -17,6 +17,7 @@ static KNOWN_PERMISSIONS: LazyLock<HashMap<&str, Severity>> = LazyLock::new(|| {
         ("artifact-metadata", Severity::Medium),
         ("attestations", Severity::High),
         ("checks", Severity::Medium),
+        ("code-quality", Severity::Medium),
         ("contents", Severity::High),
         ("deployments", Severity::High),
         ("discussions", Severity::Medium),
@@ -55,7 +56,7 @@ impl Audit for ExcessivePermissions {
     async fn audit_workflow<'doc>(
         &self,
         workflow: &'doc crate::models::workflow::Workflow,
-        _config: &crate::config::Config,
+        _group: &crate::registry::input::InputGroup,
     ) -> Result<Vec<crate::finding::Finding<'doc>>, AuditError> {
         let mut findings = vec![];
 
@@ -73,7 +74,7 @@ impl Audit for ExcessivePermissions {
         );
 
         let workflow_is_reusable_only =
-            workflow.has_workflow_call() && workflow.has_single_trigger();
+            workflow.workflow_call().is_some() && workflow.has_single_trigger();
 
         // Top-level permissions are a pedantic finding under the following
         // conditions:

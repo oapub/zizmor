@@ -21,14 +21,16 @@ pub mod schema;
 use crate::{
     App, CollectionOptions,
     audit::{
-        AuditCore, dependabot_cooldown::DependabotCooldown, forbidden_uses::ForbiddenUses,
+        AuditCore as _, dependabot_cooldown::DependabotCooldown, forbidden_uses::ForbiddenUses,
+        known_vulnerable_actions::KnownVulnerableActions,
         secrets_outside_env::SecretsOutsideEnvironment, unpinned_uses::UnpinnedUses,
     },
     finding::{Finding, Severity},
     github::{Client, ClientError},
     models::uses::RepositoryUsesPattern,
-    registry::input::RepoSlug,
+    registry::input::InputSlug,
 };
+use crate::{audit::self_hosted_runner::SelfHostedRunner, registry::input::root::Root};
 
 const CONFIG_CANDIDATES: &[&str] = &[
     ".github/zizmor.yml",
@@ -132,7 +134,7 @@ impl<'de> Deserialize<'de> for WorkflowRule {
         D: serde::Deserializer<'de>,
     {
         let raw = String::deserialize(deserializer)?;
-        WorkflowRule::from_str(&raw).map_err(de::Error::custom)
+        Self::from_str(&raw).map_err(de::Error::custom)
     }
 }
 
@@ -262,6 +264,19 @@ impl Deref for ForbiddenUsesConfig {
     }
 }
 
+/// Configuration for the `self-hosted-runner` audit.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub(crate) struct SelfHostedRunnerConfig {
+    /// Additional runner labels the user want to declare as self-hosted
+    /// and should be flagged by the audit
+    pub(crate) deny_runners: HashSet<String>,
+    /// Any Runner Groups the user wants to avoid being flagged,
+    /// usually Runner Groups for Github Large Runners
+    pub(crate) allow_groups: HashSet<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
@@ -376,7 +391,7 @@ impl UnpinnedUsesPolicies {
                 // Policies are ordered by specificity, so we can
                 // iterate and return eagerly.
                 for (uses_pattern, policy) in policies {
-                    if uses_pattern.matches(uses) {
+                    if uses_pattern.matches(&uses.into()) {
                         return (Some(uses_pattern), *policy);
                     }
                 }
@@ -467,6 +482,15 @@ impl TryFrom<UnpinnedUsesConfig> for UnpinnedUsesPolicies {
     }
 }
 
+/// # Configuration for the `known-vulnerable-actions` audit.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub(crate) struct KnownVulnerableActionsConfig {
+    /// List of advisory IDs to ignore for this audit.
+    pub(crate) allow: HashSet<String>,
+}
+
 /// zizmor's configuration.
 ///
 /// This is a wrapper around [`RawConfig`] that pre-computes various
@@ -481,6 +505,8 @@ pub(crate) struct Config {
     pub(crate) forbidden_uses_config: Option<ForbiddenUsesConfig>,
     pub(crate) secrets_outside_env_policy: SecretsOutsideEnvPolicy,
     pub(crate) unpinned_uses_policies: UnpinnedUsesPolicies,
+    pub(crate) known_vulnerable_actions_config: KnownVulnerableActionsConfig,
+    pub(crate) self_hosted_runner_config: SelfHostedRunnerConfig,
 }
 
 impl Config {
@@ -510,12 +536,22 @@ impl Config {
             }
         };
 
+        let known_vulnerable_actions_config = raw
+            .rule_config::<KnownVulnerableActionsConfig>(KnownVulnerableActions::ident())?
+            .unwrap_or_default();
+
+        let self_hosted_runner_config = raw
+            .rule_config::<SelfHostedRunnerConfig>(SelfHostedRunner::ident())?
+            .unwrap_or_default();
+
         Ok(Self {
             raw,
             dependabot_cooldown_config,
             forbidden_uses_config,
             secrets_outside_env_policy,
             unpinned_uses_policies,
+            known_vulnerable_actions_config,
+            self_hosted_runner_config,
         })
     }
 
@@ -552,25 +588,66 @@ impl Config {
         }
     }
 
-    /// Discover a [`Config`] in the given directory.
+    /// Discover a [`Config`] appropriate for the given directory (as `path`).
     ///
     /// This uses the following discovery procedure:
-    /// 1. If the given directory is `blahblah/.github/workflows/`,
+    /// 1. If we have a Git root, then we try `{root}/.github/zizmor.ya?ml`
+    ///    and `{root}/zizmor.ya?ml` in that order. If none is found, config
+    ///    search ends here.
+    /// 2. If we don't have a root directory, we search relative to
+    ///    the given directory.
+    /// 3. If the given directory is `blahblah/.github/workflows/`,
     ///    start at the parent (i.e. `blahblah/.github/`). Otherwise, start
     ///    at the given directory. This first directory is the
     ///    first candidate path.
-    /// 2. Look for `.github/zizmor.yml` or `zizmor.yml` in the
+    /// 4. Look for `.github/zizmor.yml` or `zizmor.yml` in the
     ///    candidate path. If found, load and return it.
-    /// 3. Otherwise, continue the search in the candidate path's
+    /// 5. Otherwise, continue the search in the candidate path's
     ///    parent directory, repeating step 2, terminating when
     ///    we reach the filesystem root or the first .git directory.
-    fn discover_in_dir(path: &Utf8Path) -> Result<Option<Self>, ConfigErrorInner> {
-        tracing::debug!("attempting config discovery in `{path}`");
+    #[tracing::instrument]
+    fn discover_in_dir(
+        path: &Utf8Path,
+        root: Option<&Root>,
+    ) -> Result<Option<Self>, ConfigErrorInner> {
+        tracing::debug!("attempting config discovery for `{path}` (root: `{root:?}`)");
 
+        // Happy path: if we have a known repository root, attempt to discover from there.
+        if let Some(root) = root {
+            let _span = tracing::span!(tracing::Level::DEBUG, "happy path").entered();
+
+            for candidate in CONFIG_CANDIDATES {
+                let candidate_path = root.path().join(candidate);
+
+                if candidate_path.is_file() {
+                    tracing::debug!("found config candidate at `{candidate_path}`");
+                    return Ok(Some(Self::load(&fs::read_to_string(&candidate_path)?)?));
+                }
+            }
+
+            // We don't fall back to non-root discovery if we have a root,
+            // even if our candidates failed to yield a config.
+            tracing::debug!("no config candidates discovered relative to repository root");
+            return Ok(None);
+        }
+
+        // Sad path: the user gave us some (potentially arbitrarily deep) path
+        // into some non-repository tree, and we need to find our config
+        // *somewhere* above us.
+        // TODO: Potentially remove this path entirely.
+        let _span = tracing::span!(tracing::Level::DEBUG, "sad path").entered();
+
+        tracing::debug!("config discovery: no root, falling back to search");
         let canonical = path.canonicalize_utf8()?;
 
-        let mut candidate_path = if canonical.file_name() == Some("workflows") {
-            let Some(parent) = canonical.parent() else {
+        // Sad hack case: if the user passed `.github/workflows` directly, we
+        // need to start two directories up to avoid confusing `zizmor.yml`
+        // (a GitHub Actions workflow) with `zizmor.yml` (the config).
+        let mut candidate_path = if canonical.file_name() == Some("workflows")
+            && let Some(parent) = canonical.parent()
+            && parent.file_name() == Some(".github")
+        {
+            let Some(parent) = parent.parent() else {
                 tracing::debug!("no parent for `{canonical}`, cannot discover config");
                 return Ok(None);
             };
@@ -583,15 +660,11 @@ impl Config {
         loop {
             for candidate in CONFIG_CANDIDATES {
                 let candidate_path = candidate_path.join(candidate);
+                tracing::trace!("trying config candidate path: `{candidate_path}`");
                 if candidate_path.is_file() {
                     tracing::debug!("found config candidate at `{candidate_path}`");
                     return Ok(Some(Self::load(&fs::read_to_string(&candidate_path)?)?));
                 }
-            }
-
-            if candidate_path.join(".git").is_dir() {
-                tracing::debug!("found `{candidate_path}/.git`, stopping search");
-                return Ok(None);
             }
 
             let Some(parent) = candidate_path.parent() else {
@@ -611,11 +684,14 @@ impl Config {
     ///
     /// For directories, this attempts to find a `.github/zizmor.yml` or
     /// `zizmor.yml` in the directory itself.
-    pub(crate) async fn discover_local(path: &Utf8Path) -> Result<Option<Self>, ConfigError> {
-        tracing::debug!("discovering config for local input `{path}`");
+    pub(crate) async fn discover_local(
+        path: &Utf8Path,
+        root: Option<&Root>,
+    ) -> Result<Option<Self>, ConfigError> {
+        tracing::debug!("discovering config for local input `{path}` (root: `{root:?}`)");
 
         if path.is_dir() {
-            Self::discover_in_dir(path).map_err(|err| ConfigError {
+            Self::discover_in_dir(path, root).map_err(|err| ConfigError {
                 path: path.to_string(),
                 source: err,
             })
@@ -633,7 +709,7 @@ impl Config {
                 }
             };
 
-            Self::discover_in_dir(parent).map_err(|err| ConfigError {
+            Self::discover_in_dir(parent, root).map_err(|err| ConfigError {
                 path: path.to_string(),
                 source: err,
             })
@@ -646,7 +722,7 @@ impl Config {
     /// in the repository's root directory.
     pub(crate) async fn discover_remote(
         client: &Client,
-        slug: &RepoSlug,
+        slug: &InputSlug,
     ) -> Result<Option<Self>, ConfigError> {
         for candidate in CONFIG_CANDIDATES {
             match client.fetch_single_file(slug, candidate).await {
@@ -777,7 +853,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use std::str::FromStr as _;
 
     use super::WorkflowRule;
 

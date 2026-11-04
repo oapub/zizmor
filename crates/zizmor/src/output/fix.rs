@@ -2,20 +2,20 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
-use camino::Utf8PathBuf;
-use owo_colors::OwoColorize;
+use anyhow::{Context as _, Result};
+use camino::Utf8Path;
+use owo_colors::OwoColorize as _;
 
 use crate::{
-    FixMode,
+    cli::FixMode,
     finding::{Finding, Fix, FixDisposition},
-    models::AsDocument,
+    models::AsDocument as _,
     registry::{FindingRegistry, input::InputKey, input::InputRegistry},
 };
 
 /// Result of applying fixes.
 #[derive(Debug)]
-pub struct FixResult {
+pub(crate) struct FixResult {
     /// Number of fixes that were successfully applied.
     pub applied_count: usize,
     /// Number of fixes that failed to apply.
@@ -23,7 +23,7 @@ pub struct FixResult {
 }
 
 /// Apply all fixes associated with findings, filtered by the specified fix mode.
-pub fn apply_fixes(
+pub(crate) fn apply_fixes(
     fix_mode: FixMode,
     results: &FindingRegistry,
     registry: &InputRegistry,
@@ -80,7 +80,7 @@ pub fn apply_fixes(
         };
 
         let input = registry.get_input(input_key);
-        let file_path = &local.given_path;
+        let file_path = local.path();
 
         let mut file_applied_fixes = Vec::new();
         let mut current_document = input.as_document().clone();
@@ -127,10 +127,7 @@ pub fn apply_fixes(
     })
 }
 
-fn print_summary(
-    applied_fixes: &[(&Utf8PathBuf, usize)],
-    failed_fixes: &[(&str, &Utf8PathBuf, String)],
-) {
+fn print_summary(applied_fixes: &[(&Utf8Path, usize)], failed_fixes: &[(&str, &Utf8Path, String)]) {
     anstream::eprintln!("\n{}", "Fix Summary".green().bold());
 
     if !applied_fixes.is_empty() {

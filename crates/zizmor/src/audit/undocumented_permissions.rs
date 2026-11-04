@@ -3,7 +3,7 @@ use github_actions_models::common::{Permission, Permissions};
 use super::{Audit, AuditLoadError, Job, audit_meta};
 use crate::audit::AuditError;
 use crate::finding::location::Locatable as _;
-use crate::models::AsDocument;
+use crate::models::AsDocument as _;
 use crate::{
     AuditState,
     finding::{Confidence, Persona, Severity, location::SymbolicLocation},
@@ -29,7 +29,7 @@ impl Audit for UndocumentedPermissions {
     async fn audit_workflow<'doc>(
         &self,
         workflow: &'doc crate::models::workflow::Workflow,
-        _config: &crate::config::Config,
+        _group: &crate::registry::input::InputGroup,
     ) -> Result<Vec<crate::finding::Finding<'doc>>, AuditError> {
         let mut findings = vec![];
 
